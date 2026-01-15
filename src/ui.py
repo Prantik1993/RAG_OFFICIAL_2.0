@@ -1,10 +1,10 @@
 import streamlit as st
 import requests
 import uuid
-
+import os
 # --- CONFIGURATION ---
 # In a real deployment, this URL might come from an environment variable
-API_BASE_URL = "http://127.0.0.1:8000"
+API_BASE_URL = os.getenv("API_URL", "http://localhost:8000")
 CHAT_ENDPOINT = f"{API_BASE_URL}/chat"
 
 # --- PAGE SETUP ---

@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+.git/
+.env
+logs/
+storage/
+tests/
+locustfile.py
+venv/
+venv
+storage/
