@@ -28,3 +28,5 @@ python-dotenv==1.0.0
 requests==2.31.0
 flashrank
 tiktoken>=0.7.0
+pytest
+httpx=0.27.2
