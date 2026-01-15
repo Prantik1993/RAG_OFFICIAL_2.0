@@ -4,6 +4,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from src.config import Config
 from src.logger import get_logger
 from src.exceptions import DataIngestionError
+from src.exceptions import DataIngestionError
 
 logger = get_logger(__name__)
 
