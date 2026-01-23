@@ -12,26 +12,17 @@ logger = get_logger("PDFParser")
 class LegalDocumentParser:
     """
     Advanced parser for EU Regulations.
-    
-    STRATEGY:
-    1. Regulation Phase: Captures points (1), (2), etc. as "Regulation Points" (Recitals).
-    2. Legislative Phase: Captures Articles, Chapters, and Sections.
     """
     
     def __init__(self):
         # --- REGEX PATTERNS ---
-        
-        # 1. Structure Detectors
         self.chapter_pattern = re.compile(r"^CHAPTER\s+([IVX\d]+)", re.IGNORECASE)
         self.section_pattern = re.compile(r"^Section\s+(\d+)", re.IGNORECASE)
         self.article_pattern = re.compile(r"^Article\s+(\d+)", re.IGNORECASE)
         
-        # 2. Regulation Point Detector (Recitals)
         # Matches "(1)", "1.", "(1 )" at the start of a line
-        # Also handles plain numbers if they appear in the right context
         self.recital_pattern = re.compile(r"^\(?\s*(\d+)\s*\)(?:\.|)") 
         
-        # 3. Internal Article Structure (Subsections and Points)
         self.subsection_pattern = re.compile(r"^(\d+)\.\s") 
         self.point_pattern = re.compile(r"^\(([a-z])\)\s")
 
@@ -44,11 +35,15 @@ class LegalDocumentParser:
         except Exception as e:
             raise ParsingError(f"PDF loading failed: {e}")
     
+# In src/ingestion/pdf_parser.py, replace the extract_document_structure method:
+
     def extract_document_structure(self, pages: List) -> List[ArticleStructure]:
         """
         Parses document using a 2-Phase Strategy.
         Phase 1: Regulation Points (Recitals)
         Phase 2: Articles (Legislative Act)
+        
+        FIXED: Better chapter/section tracking to prevent missed assignments
         """
         structures = []
         
@@ -63,7 +58,9 @@ class LegalDocumentParser:
 
         # State Variables
         current_chapter = None
+        current_chapter_title = None
         current_section = None
+        current_section_title = None
         current_struct = None
         in_regulation_phase = True 
         
@@ -73,27 +70,17 @@ class LegalDocumentParser:
             text = line_data["text"]
             page = line_data["page"]
             
-            # --- CRITICAL FIX: STRICTER PHASE SWITCHING ---
-            # Old code switched on ANY "Article X". This caused premature exits.
-            # New code only switches on specific markers that denote the start of the law.
-            
+            # --- PHASE SWITCHING DETECTION ---
             is_start_of_legislation = False
             
-            # 1. Standard EU Transition Phrase
             if "HAVE ADOPTED THIS REGULATION" in text.upper() or "HAVE ADOPTED THIS DIRECTIVE" in text.upper():
                 is_start_of_legislation = True
-            
-            # 2. Start of Chapter I
             elif self.chapter_pattern.match(text):
                 match = self.chapter_pattern.match(text)
-                # Only switch if it is Chapter 1 (I)
                 if match.group(1) in ['1', 'I', 'i']:
                     is_start_of_legislation = True
-            
-            # 3. Start of Article 1 (Specific check)
             elif self.article_pattern.match(text):
                 match = self.article_pattern.match(text)
-                # Only switch if it is specifically Article 1
                 if match.group(1) == '1':
                     is_start_of_legislation = True
 
@@ -101,37 +88,25 @@ class LegalDocumentParser:
                 logger.info(f"Switching to Legislative Phase at: {text}")
                 in_regulation_phase = False
 
-            # --- PHASE 1: REGULATION POINTS ((1)...(100)) ---
+            # --- PHASE 1: REGULATION POINTS ---
             if in_regulation_phase:
                 reg_match = self.recital_pattern.match(text)
                 
-                # We also check that the number is sequential or reasonable to avoid false positives
-                # (e.g., preventing a list item "1." inside a summary from being a recital)
-                is_valid_recital = False
                 if reg_match:
-                    # Optional: Add logic here to ensure Recital 5 follows Recital 4
-                    # For now, we trust the regex and the phase
-                    is_valid_recital = True
-
-                if is_valid_recital:
-                    # Save previous structure
                     if current_struct:
                         structures.append(current_struct)
                     
-                    # Create new Regulation Point
                     reg_id = reg_match.group(1)
-                    # Clean the content (remove the number)
                     content = text[reg_match.end():].strip()
                     
                     current_struct = ArticleStructure(
                         id=reg_id,
-                        title="Regulation Point", # Internal Label
+                        title="Regulation Point",
                         page=page,
                         full_text=content,
                         is_recital=True 
                     )
                 elif current_struct and current_struct.is_recital:
-                    # Append text to current Regulation Point
                     current_struct.full_text += " " + text
                 
                 i += 1
@@ -139,25 +114,40 @@ class LegalDocumentParser:
 
             # --- PHASE 2: LEGISLATIVE ARTICLES ---
             
-            # Detect Chapter
+            # Detect Chapter (and capture title)
             chap_match = self.chapter_pattern.match(text)
             if chap_match:
                 current_chapter = chap_match.group(1)
+                # Look ahead for chapter title (next line)
+                if i + 1 < len(all_lines):
+                    next_text = all_lines[i + 1]["text"]
+                    # If next line isn't a section/article, it's the chapter title
+                    if not self.section_pattern.match(next_text) and not self.article_pattern.match(next_text):
+                        current_chapter_title = next_text
+                        logger.info(f"Detected Chapter {current_chapter}: {current_chapter_title}")
+                        i += 1  # Skip the title line
                 i += 1
                 continue
 
-            # Detect Section
+            # Detect Section (and capture title)
             sec_match = self.section_pattern.match(text)
             if sec_match:
                 current_section = sec_match.group(1)
+                # Look ahead for section title
+                if i + 1 < len(all_lines):
+                    next_text = all_lines[i + 1]["text"]
+                    if not self.article_pattern.match(next_text) and len(next_text) < 200:
+                        current_section_title = next_text
+                        logger.info(f"Detected Section {current_section}: {current_section_title}")
+                        i += 1  # Skip the title line
                 i += 1
                 continue
 
             # Detect Article
             art_match = self.article_pattern.match(text)
             if art_match:
+                # Save previous article
                 if current_struct:
-                    # Parse subsections for the finished article
                     if not current_struct.is_recital:
                         current_struct.subsections = self._parse_subsections(current_struct.full_text)
                     structures.append(current_struct)
@@ -169,20 +159,24 @@ class LegalDocumentParser:
                 next_idx = i + 1
                 if next_idx < len(all_lines):
                     next_line = all_lines[next_idx]["text"]
-                    # If next line is not a subsection "1." and reasonably short, it's a title
+                    # If next line is not a subsection and reasonably short, it's a title
                     if not self.subsection_pattern.match(next_line) and len(next_line) < 200:
                         title = next_line
-                        i += 1 # Skip title line
+                        i += 1  # Skip title line
                 
+                # CRITICAL: Assign current chapter/section to this article
                 current_struct = ArticleStructure(
                     id=art_id,
                     title=title,
                     page=page,
                     full_text="",
-                    chapter=current_chapter,
-                    section=current_section,
+                    chapter=current_chapter,  # ← This captures the chapter
+                    section=current_section,  # ← This captures the section
                     is_recital=False
                 )
+                
+                logger.debug(f"Article {art_id} assigned to Chapter {current_chapter}, Section {current_section}")
+                
                 i += 1
                 continue
             
@@ -199,14 +193,16 @@ class LegalDocumentParser:
             structures.append(current_struct)
 
         logger.info(f"Extracted {len(structures)} structures.")
+        
+        # Log chapter/section distribution for debugging
+        chapters_found = set(s.chapter for s in structures if s.chapter)
+        sections_found = set(s.section for s in structures if s.section)
+        logger.info(f"Chapters found: {sorted(chapters_found)}")
+        logger.info(f"Sections found: {sorted(sections_found)}")
+        
         return structures
 
     def _parse_subsections(self, text: str) -> List[Dict]:
-        """
-        Parses the hierarchy within an Article text:
-        1. Subsection text
-           (a) Point text
-        """
         subsections = []
         lines = text.split('\n')
         
@@ -234,7 +230,6 @@ class LegalDocumentParser:
                 curr_sub_num = sub_match.group(1)
                 curr_sub_text = [line[sub_match.end():].strip()]
                 curr_points = []
-                
             elif point_match:
                 if not curr_sub_num: curr_sub_num = "0"
                 curr_points.append({
@@ -251,32 +246,30 @@ class LegalDocumentParser:
         return subsections
 
     def create_chunks_from_articles(self, articles: List[ArticleStructure]) -> List[DocumentChunk]:
-        """Convert extracted structures into searchable chunks"""
         chunks = []
         
         for struct in articles:
-            # --- HANDLE REGULATION POINTS (Recitals) ---
+            # Handle Recitals
             if struct.is_recital:
-                # We map this to 'recital' metadata so exact retriever finds it
                 ref = LegalReference(recital=struct.id)
                 chunks.append(DocumentChunk(
                     content=struct.full_text,
                     reference=ref,
                     page=struct.page,
                     chunk_id=f"regulation_point_{struct.id}",
-                    level=DocumentLevel.RECITAL # Mapped to Recital Level
+                    level=DocumentLevel.RECITAL
                 ))
                 continue
 
-            # --- HANDLE ARTICLES ---
+            # Handle Articles
             base_ref = LegalReference(
                 chapter=struct.chapter,
                 section=struct.section,
+                section_title=struct.section_title, 
                 article=struct.id,
                 article_title=struct.title
             )
             
-            # 1. Full Article Chunk
             chunks.append(DocumentChunk(
                 content=struct.full_text,
                 reference=base_ref,
@@ -285,11 +278,11 @@ class LegalDocumentParser:
                 level=DocumentLevel.ARTICLE
             ))
             
-            # 2. Subsection Chunks
             for sub in struct.subsections:
                 sub_ref = LegalReference(
                     chapter=struct.chapter,
                     section=struct.section,
+                    section_title=struct.section_title, 
                     article=struct.id,
                     article_title=struct.title,
                     subsection=sub["number"]
@@ -308,11 +301,11 @@ class LegalDocumentParser:
                     parent_content=struct.title
                 ))
                 
-                # 3. Point Chunks
                 for p in sub["points"]:
                     point_ref = LegalReference(
                         chapter=struct.chapter,
                         section=struct.section,
+                        section_title=struct.section_title, 
                         article=struct.id,
                         article_title=struct.title,
                         subsection=sub["number"],

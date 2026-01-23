@@ -96,4 +96,5 @@ class ArticleStructure:
     subsections: List[Dict[str, Any]] = field(default_factory=list)
     chapter: Optional[str] = None
     section: Optional[str] = None
+    section_title: Optional[str] = None
     is_recital: bool = False
