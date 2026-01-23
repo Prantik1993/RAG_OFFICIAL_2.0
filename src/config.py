@@ -6,6 +6,13 @@ load_dotenv()
 class Config:
     # --- SECRETS ---
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    
+    # Validate API key on startup
+    if not OPENAI_API_KEY:
+        raise EnvironmentError(
+            "OPENAI_API_KEY environment variable is required. "
+            "Please set it in your .env file or environment."
+        )
 
     # --- PATHS ---
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +24,7 @@ class Config:
     PDF_FILE = os.path.join(DATA_DIR, "CELEX_32016R0679_EN_TXT.pdf")
 
     # --- MODELS ---
-    LLM_MODEL = "gpt-3.5-turbo"
+    LLM_MODEL = "gpt-4o-mini"
     EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
     RERANKER_MODEL = "ms-marco-MiniLM-L-12-v2"
 
@@ -33,9 +40,15 @@ class Config:
     # Query Classification
     EXACT_REFERENCE_CONFIDENCE = 0.8
     
-    # Article Patterns
-    ARTICLE_PATTERN = r"Article\s+(\d+)"
-    SUBSECTION_PATTERN = r"^\s*(\d+)\.\s+"
-    POINT_PATTERN = r"^\s*\(([a-z])\)\s+"
-    CHAPTER_PATTERN = r"CHAPTER\s+([IVX]+)"
-    SECTION_PATTERN = r"Section\s+(\d+)"
+    # PDF Parsing Configuration
+    MAX_ARTICLE_TITLE_LENGTH = 200
+    
+    # API Configuration
+    API_TITLE = "GDPR Legal RAG API"
+    API_VERSION = "2.0"
+    API_DESCRIPTION = "Advanced RAG system with hybrid retrieval for legal documents"
+    API_HOST = "0.0.0.0"
+    API_PORT = 8000
+    
+    # Input Validation
+    MAX_QUERY_LENGTH = 2000
