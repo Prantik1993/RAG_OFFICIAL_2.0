@@ -81,7 +81,7 @@ class VectorStoreManager:
     def _create_metadata_index(self, documents: List[Document]):
         """
         Create a separate metadata index for efficient lookups.
-        Maps article references to document IDs.
+        Maps article references AND recitals to document IDs.
         """
         try:
             logger.info("Creating metadata index...")
@@ -90,15 +90,27 @@ class VectorStoreManager:
             # Build index structure
             index = {
                 "articles": {},  # article_num -> [chunk_ids]
-                "references": {}  # full_reference -> chunk_id
+                "references": {},  # full_reference -> chunk_id
+                "recitals": {}   # recital_num -> chunk_id
             }
             
             for i, doc in enumerate(documents):
                 chunk_id = doc.metadata.get("chunk_id")
                 article = doc.metadata.get("article")
+                recital = doc.metadata.get("recital")  # Extract recital metadata
                 subsection = doc.metadata.get("subsection")
                 point = doc.metadata.get("point")
                 
+                # --- FIX START: Index Recitals ---
+                if recital:
+                    # Store mapping: Recital Number -> Chunk ID
+                    index["recitals"][str(recital)] = chunk_id
+                    
+                    # Add to references for direct lookup (e.g. "recital_50")
+                    full_ref = f"recital_{recital}"
+                    index["references"][full_ref] = chunk_id
+                # --- FIX END ---
+
                 # Index by article number
                 if article:
                     if article not in index["articles"]:
@@ -118,7 +130,7 @@ class VectorStoreManager:
             with open(self.metadata_file, 'w') as f:
                 json.dump(index, f, indent=2)
             
-            logger.info(f"Metadata index created: {len(index['articles'])} articles indexed")
+            logger.info(f"Metadata index created: {len(index['articles'])} articles and {len(index['recitals'])} recitals indexed")
         
         except Exception as e:
             logger.error(f"Failed to create metadata index: {e}")

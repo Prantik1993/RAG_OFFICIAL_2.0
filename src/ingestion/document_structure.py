@@ -41,7 +41,7 @@ class LegalReference:
     def get_full_reference(self) -> str:
         """Get human-readable reference string"""
         if self.recital:
-            return f"Recital ({self.recital})"
+            return f"Regulation Point ({self.recital})"
             
         parts = []
         if self.chapter:

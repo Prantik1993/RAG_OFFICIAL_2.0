@@ -2,6 +2,7 @@ from typing import List
 from langchain_core.documents import Document
 from src.ingestion.pdf_parser import LegalDocumentParser
 from src.ingestion.document_structure import DocumentChunk
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from src.config import Config
 from src.logger import get_logger
 from src.exceptions import DataIngestionError
@@ -18,6 +19,13 @@ class IngestionPipeline:
     
     def __init__(self):
         self.parser = LegalDocumentParser()
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=Config.CHUNK_SIZE,
+            chunk_overlap=Config.CHUNK_OVERLAP,
+            separators=["\n\n", "\n", " ", ""],
+            keep_separator=True
+        )
+
     
     def run(self, pdf_path: str = None) -> List[Document]:
         """
@@ -32,7 +40,8 @@ class IngestionPipeline:
             chunks = self.parser.parse_document(pdf_path)
             
             # Convert to LangChain Documents
-            documents = [chunk.to_langchain_document() for chunk in chunks]
+            base_documents = [chunk.to_langchain_document() for chunk in chunks]
+            documents = self.text_splitter.split_documents(base_documents)
             
             logger.info(f"Ingestion complete: {len(documents)} documents created")
             self._log_statistics(documents)
