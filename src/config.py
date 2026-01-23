@@ -1,7 +1,6 @@
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
 class Config:
@@ -9,13 +8,12 @@ class Config:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
     # --- PATHS ---
-    # Automatically finds the project root directory
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    DATA_DIR = os.path.join(BASE_DIR, "data")
+    DATA_DIR = os.path.join(BASE_DIR, "data", "pdfs")
     STORAGE_DIR = os.path.join(BASE_DIR, "storage", "faiss_index")
+    METADATA_DIR = os.path.join(BASE_DIR, "storage", "metadata")
     LOG_DIR = os.path.join(BASE_DIR, "logs")
     
-    # The specific PDF file to load
     PDF_FILE = os.path.join(DATA_DIR, "CELEX_32016R0679_EN_TXT.pdf")
 
     # --- MODELS ---
@@ -24,9 +22,20 @@ class Config:
     RERANKER_MODEL = "ms-marco-MiniLM-L-12-v2"
 
     # --- RAG TUNING ---
-    CHUNK_SIZE = 2000
-    CHUNK_OVERLAP = 400
+    CHUNK_SIZE = 1500
+    CHUNK_OVERLAP = 300
     
-    # Search Strategy: Fetch 20 (Broad), Rerank down to 5 (Precise)
-    RETRIEVER_K_BASE = 10  
+    # Retrieval Strategy
+    RETRIEVER_K_BASE = 20
+    RETRIEVER_K_RERANKED = 5
     RETRIEVER_K_FINAL = 3
+    
+    # Query Classification
+    EXACT_REFERENCE_CONFIDENCE = 0.8
+    
+    # Article Patterns
+    ARTICLE_PATTERN = r"Article\s+(\d+)"
+    SUBSECTION_PATTERN = r"^\s*(\d+)\.\s+"
+    POINT_PATTERN = r"^\s*\(([a-z])\)\s+"
+    CHAPTER_PATTERN = r"CHAPTER\s+([IVX]+)"
+    SECTION_PATTERN = r"Section\s+(\d+)"
