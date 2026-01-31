@@ -1,100 +1,84 @@
-from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from dataclasses import dataclass
 from enum import Enum
+from typing import Optional, Dict, Any
 
-class DocumentLevel(Enum):
-    """Hierarchy levels in legal documents"""
-    REGULATION = "regulation"
-    RECITAL = "recital"  # Added for (1), (2) intro text
-    CHAPTER = "chapter"
-    SECTION = "section"
+
+class DocumentLevel(str, Enum):
+    """
+    Logical level of a document chunk.
+
+    Kept intentionally minimal.
+    Used by:
+    - Hybrid retrieval routing
+    - UI display
+    - Debugging / analytics
+    """
+    RECITAL = "recital"
     ARTICLE = "article"
-    SUBSECTION = "subsection"
-    POINT = "point"
 
-@dataclass
+
+@dataclass(frozen=True)
 class LegalReference:
-    """Represents a complete legal reference path"""
+    """
+    Flat legal reference metadata.
+
+    DESIGN PRINCIPLE:
+    - TAG structure, do NOT reconstruct hierarchy
+    - Optimized for metadata filtering in vector databases
+    """
+
     recital: Optional[str] = None
     chapter: Optional[str] = None
-    chapter_title: Optional[str] = None
     section: Optional[str] = None
-    section_title: Optional[str] = None
     article: Optional[str] = None
-    article_title: Optional[str] = None
-    subsection: Optional[str] = None
-    point: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_metadata(self) -> Dict[str, Any]:
+        """
+        Convert reference to vector-store-friendly metadata.
+        """
         return {
             "recital": self.recital,
             "chapter": self.chapter,
-            "chapter_title": self.chapter_title,
             "section": self.section,
-            "section_title": self.section_title,
             "article": self.article,
-            "article_title": self.article_title,
-            "subsection": self.subsection,
-            "point": self.point
         }
-    
-    def get_full_reference(self) -> str:
-        """Get human-readable reference string"""
-        if self.recital:
-            return f"Regulation Point ({self.recital})"
-            
-        parts = []
-        if self.chapter:
-            parts.append(f"Chapter {self.chapter}")
-        if self.section:
-            parts.append(f"Section {self.section}")
-        if self.article:
-            ref = f"Article {self.article}"
-            if self.subsection:
-                ref += f"({self.subsection})"
-            if self.point:
-                ref += f"({self.point})"
-            parts.append(ref)
-        return " → ".join(parts) if parts else "Unknown"
+
 
 @dataclass
 class DocumentChunk:
-    """Represents a processed document chunk with metadata"""
+    """
+    Atomic ingestion unit.
+
+    One chunk represents:
+    - One Recital OR
+    - One Article (pre-splitting)
+
+    NOTE:
+    - Further splitting happens in the ingestion pipeline
+    - This object should stay simple and immutable in meaning
+    """
+
     content: str
     reference: LegalReference
     page: int
     chunk_id: str
     level: DocumentLevel
-    parent_content: Optional[str] = None
-    
-    def to_langchain_document(self):
-        """Convert to LangChain Document format"""
-        from langchain_core.documents import Document
-        
-        metadata = {
-            "page": self.page,
-            "chunk_id": self.chunk_id,
-            "level": self.level.value,
-            "full_reference": self.reference.get_full_reference(),
-            **self.reference.to_dict()
-        }
-        
-        # Combine content with parent context if available for better embedding
-        full_content = self.content
-        if self.parent_content:
-            full_content = f"Context: {self.parent_content}\n---\n{self.content}"
-        
-        return Document(page_content=full_content, metadata=metadata)
 
-@dataclass
-class ArticleStructure:
-    """Represents a complete structure (Recital OR Article)"""
-    id: str  # Number/ID
-    title: str
-    page: int
-    full_text: str
-    subsections: List[Dict[str, Any]] = field(default_factory=list)
-    chapter: Optional[str] = None
-    section: Optional[str] = None
-    section_title: Optional[str] = None
-    is_recital: bool = False
+    def to_langchain_document(self):
+        """
+        Convert to LangChain Document.
+
+        This is the ONLY place where LangChain is referenced.
+        Keeps ingestion logic decoupled from retrieval logic.
+        """
+        from langchain_core.documents import Document
+
+        return Document(
+            page_content=self.content,
+            metadata={
+                "page": self.page,
+                "chunk_id": self.chunk_id,
+                "level": self.level.value,
+                **self.reference.to_metadata(),
+            },
+        )
