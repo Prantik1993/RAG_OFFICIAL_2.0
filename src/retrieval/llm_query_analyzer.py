@@ -1,14 +1,3 @@
-"""
-LLM-Powered Query Analyzer
-Uses GPT to understand user intent instead of brittle regex patterns.
-
-Handles:
-- Natural language queries with typos
-- Complex questions like "What is chapter 2 section III first article"
-- Direct questions about content
-- Comparison and conceptual queries
-"""
-
 from typing import Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -107,15 +96,13 @@ If the query explicitly references GDPR structure
    - Set confidence HIGH (0.6–1.0)
    - Even if the query is short (e.g. "recital 78 summary")
 
-If the query is about GDPR concepts or rights:
-   - Treat as valid
-   - Set confidence HIGH (0.6–1.0)
-
 If the query is casual chat, jokes, greetings, nonsense,
    or unrelated to GDPR or law:
    - Set confidence LOW (0.0–0.2)
    - Keep intent as "general"     
-
+             
+If the query is follow up question set confidence high
+             
 The document has this structure:
 - Recitals: (1), (2), ..., (108)
 - Chapters: CHAPTER I, II, III, IV, ... (Roman numerals)

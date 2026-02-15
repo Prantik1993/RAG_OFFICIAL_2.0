@@ -29,16 +29,13 @@ class EnhancedRAGEngine:
     
     def __init__(self, vectorstore):
         try:
-<<<<<<< HEAD
             logger.info("Initializing Enhanced RAG Engine")
             
-=======
             logger.info("Initializing RAG Engine")
 
             if not Config.OPENAI_API_KEY:
                 raise RAGChainError("OPENAI_API_KEY is required to run the RAG engine")
 
->>>>>>> 1838656519ae40225f10abc5643dde520f2e3fee
             self.llm = ChatOpenAI(
                 model=Config.LLM_MODEL,
                 temperature=0,
@@ -66,27 +63,20 @@ class EnhancedRAGEngine:
         # System prompt for answer generation
         system_prompt = """You are an expert legal assistant specialized in GDPR regulation.
 
-CRITICAL RULES:
-1. For exact reference queries (e.g., "What is Article 15.1.a?"):
+If you think this is follow up question of previous one try to generate answer
+2. For exact reference queries (e.g., "What is Article 15.1.a?"):
    - Quote the EXACT text from the context
    - Use blockquote format: > quoted text
-   - Add a brief explanation if helpful
 
-2. For range queries (e.g., "What articles are in Chapter 2 Section 1?"):
-   - List all articles found in the context
-   - Provide article numbers and brief descriptions
-
-3. For conceptual queries:
+4. For conceptual queries:
    - Synthesize information from multiple sources
    - Cite specific articles when relevant
-   - Provide clear, accurate explanations
 
-4. For comparisons:
-   - Highlight similarities and differences
-   - Reference specific articles
-   - Be objective and precise
+5. For follow-up questions (e.g., "describe it in short", "what does that mean"):
+   - Check chat_history to understand what "it" or "that" refers to
+   - Answer based on the previous context AND new retrieved documents
 
-5. ALWAYS cite your sources using the reference paths provided in the metadata.
+6. NEVER make up metadata - if you don't see chapter/section in the retrieved docs, say so
 
 Context:
 {context}"""

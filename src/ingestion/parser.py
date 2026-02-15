@@ -12,7 +12,6 @@ logger = get_logger("EnhancedParser")
 
 @dataclass
 class LegalChunk:
-    """Represents a chunk with full hierarchical context"""
     content: str
     recital: Optional[str] = None
     chapter: Optional[str] = None
@@ -30,12 +29,11 @@ class LegalChunk:
             meta["level"] = "recital"
         elif self.chapter:
             meta["chapter"] = self.chapter
+            meta["level"] = "chapter"
 
             if self.section:
                 meta["section"] = self.section
                 meta["level"] = "section"
-            else:
-                meta["level"] = "chapter"
 
             if self.article:
                 meta["article"] = self.article
@@ -49,22 +47,22 @@ class LegalChunk:
                 meta["subpoint"] = self.subpoint
                 meta["level"] = "subpoint"
 
-        ref_parts = []
+        ref = []
         if self.recital:
-            ref_parts.append(f"Recital {self.recital}")
+            ref.append(f"Recital {self.recital}")
         else:
             if self.chapter:
-                ref_parts.append(f"Chapter {self.chapter}")
+                ref.append(f"Chapter {self.chapter}")
             if self.section:
-                ref_parts.append(f"Section {self.section}")
+                ref.append(f"Section {self.section}")
             if self.article:
-                ref_parts.append(f"Article {self.article}")
+                ref.append(f"Article {self.article}")
             if self.point:
-                ref_parts.append(f"Point {self.point}")
+                ref.append(f"Point {self.point}")
             if self.subpoint:
-                ref_parts.append(f"Subpoint {self.subpoint}")
+                ref.append(f"Subpoint {self.subpoint}")
 
-        meta["reference_path"] = " → ".join(ref_parts) if ref_parts else "Document"
+        meta["reference_path"] = " → ".join(ref) if ref else "Document"
         return meta
 
     def to_document(self) -> Document:
@@ -73,8 +71,7 @@ class LegalChunk:
 
 class EnhancedLegalParser:
     """
-    CELEX/GDPR-safe hierarchical parser:
-    Recital → Chapter → Section → Article → Point → Subpoint
+    GDPR / CELEX compliant hierarchical parser
     """
 
     RECITAL_PATTERN = re.compile(r'^\(\s*(\d+)\s*\)')
@@ -95,6 +92,14 @@ class EnhancedLegalParser:
         }
         return roman_map.get(roman.upper(), roman)
 
+    def reset_context(self):
+        self.current_chapter = None
+        self.current_section = None
+        self.current_article = None
+        self.current_point = None
+        self.in_recital_phase = True
+        self.section_active = False
+
     def parse(self, pdf_path: str) -> List[LegalChunk]:
         try:
             pages = PyPDFLoader(pdf_path).load()
@@ -113,30 +118,29 @@ class EnhancedLegalParser:
                 if not line:
                     continue
 
-                # 🔑 EXIT RECITAL PHASE WHEN FIRST CHAPTER APPEARS
+                # ---- EXIT RECITAL PHASE ----
                 if self.in_recital_phase and self.CHAPTER_PATTERN.match(line):
                     self.in_recital_phase = False
                     if current_chunk:
                         chunks.append(current_chunk)
                         current_chunk = None
-                    # DO NOT continue – let chapter logic run
 
-                # -------- RECITALS --------
+                # ---- RECITAL ----
                 if self.in_recital_phase:
-                    match = self.RECITAL_PATTERN.match(line)
-                    if match:
+                    m = self.RECITAL_PATTERN.match(line)
+                    if m:
                         if current_chunk:
                             chunks.append(current_chunk)
                         current_chunk = LegalChunk(
                             content=line,
-                            recital=match.group(1),
+                            recital=m.group(1),
                             page=page_num
                         )
                     elif current_chunk:
                         current_chunk.content += " " + line
                     continue
 
-                # -------- CHAPTER --------
+                # ---- CHAPTER ----
                 chapter_match = self.CHAPTER_PATTERN.match(line)
                 if chapter_match:
                     if current_chunk:
@@ -144,6 +148,7 @@ class EnhancedLegalParser:
 
                     self.current_chapter = self._roman_to_arabic(chapter_match.group(1))
                     self.current_section = None
+                    self.section_active = False
                     self.current_article = None
                     self.current_point = None
 
@@ -154,13 +159,14 @@ class EnhancedLegalParser:
                     )
                     continue
 
-                # -------- SECTION --------
+                # ---- SECTION ----
                 section_match = self.SECTION_PATTERN.match(line)
                 if section_match:
                     if current_chunk:
                         chunks.append(current_chunk)
 
                     self.current_section = section_match.group(1)
+                    self.section_active = True
                     self.current_article = None
                     self.current_point = None
 
@@ -172,7 +178,7 @@ class EnhancedLegalParser:
                     )
                     continue
 
-                # -------- ARTICLE --------
+                # ---- ARTICLE ----
                 article_match = self.ARTICLE_PATTERN.match(line)
                 if article_match:
                     if current_chunk:
@@ -184,13 +190,13 @@ class EnhancedLegalParser:
                     current_chunk = LegalChunk(
                         content=line,
                         chapter=self.current_chapter,
-                        section=self.current_section,
+                        section=self.current_section if self.section_active else None,
                         article=self.current_article,
                         page=page_num
                     )
                     continue
 
-                # -------- POINT --------
+                # ---- POINT ----
                 point_match = self.POINT_PATTERN.match(line)
                 if point_match:
                     if current_chunk:
@@ -201,14 +207,14 @@ class EnhancedLegalParser:
                     current_chunk = LegalChunk(
                         content=line,
                         chapter=self.current_chapter,
-                        section=self.current_section,
+                        section=self.current_section if self.section_active else None,
                         article=self.current_article,
                         point=self.current_point,
                         page=page_num
                     )
                     continue
 
-                # -------- SUBPOINT --------
+                # ---- SUBPOINT ----
                 subpoint_match = self.SUBPOINT_PATTERN.match(line)
                 if subpoint_match:
                     if current_chunk:
@@ -217,7 +223,7 @@ class EnhancedLegalParser:
                     current_chunk = LegalChunk(
                         content=line,
                         chapter=self.current_chapter,
-                        section=self.current_section,
+                        section=self.current_section if self.section_active else None,
                         article=self.current_article,
                         point=self.current_point,
                         subpoint=subpoint_match.group(1),
@@ -225,7 +231,7 @@ class EnhancedLegalParser:
                     )
                     continue
 
-                # -------- CONTENT --------
+                # ---- CONTENT ----
                 if current_chunk:
                     current_chunk.content += "\n" + line
 
@@ -234,10 +240,3 @@ class EnhancedLegalParser:
 
         logger.info(f"Parsed {len(chunks)} hierarchical chunks")
         return chunks
-
-    def reset_context(self):
-        self.current_chapter = None
-        self.current_section = None
-        self.current_article = None
-        self.current_point = None
-        self.in_recital_phase = True
