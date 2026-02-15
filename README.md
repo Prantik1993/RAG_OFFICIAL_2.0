@@ -6,7 +6,7 @@ A **production-grade Retrieval-Augmented Generation (RAG)** system designed for 
 
 ### **Major Improvements**
 - **🧠 Intelligent Query Routing**: Automatically detects query type (exact reference vs conceptual)
-- **📚 Structure-Aware Parsing**: Preserves hierarchical document structure (Chapters → Sections → Articles → Subsections → Points)
+- **📚 Structure-Aware Parsing**: Preserves full legal hierarchy (Recitals/Chapters/Sections/Articles/Subsections/Points)
 - **🎯 Exact Reference Retrieval**: Direct metadata lookup for queries like "What is Article 15.1.a?"
 - **🔍 Hybrid Search**: Combines exact matching with semantic search
 - **📊 Rich Metadata**: Complete legal reference paths stored with each chunk
@@ -206,6 +206,9 @@ Index statistics
 - "What is Article 15.1.a?"
 - "Show me Article 6"
 - "Display Article 9.2.a"
+- "What is Chapter II Section III first article?"
+- "Chapter V Section 5 starts from which article?"
+- "Give me Article 2(2)(a)"
 
 ### Conceptual Questions
 - "What are the consent requirements?"

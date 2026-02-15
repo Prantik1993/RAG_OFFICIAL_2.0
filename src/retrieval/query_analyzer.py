@@ -1,11 +1,13 @@
 import re
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Dict, Any
-from dataclasses import dataclass
-from src.logger import get_logger
+from typing import Any, Dict, Optional
+
 from src.exceptions import QueryRoutingError
+from src.logger import get_logger
 
 logger = get_logger("QueryAnalyzer")
+
 
 class QueryType(Enum):
     EXACT_REFERENCE = "exact_reference"
@@ -13,10 +15,11 @@ class QueryType(Enum):
     RECITAL_LOOKUP = "recital_lookup"
     SECTION_LOOKUP = "section_lookup"
     CHAPTER_LOOKUP = "chapter_lookup"
-    CHAPTER_SECTION_LOOKUP = "chapter_section_lookup"  # NEW
+    CHAPTER_SECTION_LOOKUP = "chapter_section_lookup"
     CONCEPTUAL = "conceptual"
     COMPARISON = "comparison"
     GENERAL = "general"
+
 
 @dataclass
 class QueryAnalysis:
@@ -29,12 +32,8 @@ class QueryAnalysis:
     subsection: Optional[str] = None
     point: Optional[str] = None
     confidence: float = 0.0
-    extracted_concepts: list = None
-    
-    def __post_init__(self):
-        if self.extracted_concepts is None:
-            self.extracted_concepts = []
-    
+    extracted_concepts: list[str] = field(default_factory=list)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "query_type": self.query_type.value,
@@ -44,243 +43,129 @@ class QueryAnalysis:
             "chapter": self.chapter,
             "subsection": self.subsection,
             "point": self.point,
-            "confidence": self.confidence
+            "confidence": self.confidence,
         }
+
 
 class QueryAnalyzer:
-    """
-    Enhanced analyzer with Chapter+Section combined detection
-    """
-    
+    """Parser-style query analyzer with typo-tolerant legal reference extraction."""
+
+    ROMAN_TO_ARABIC = {
+        "I": "1",
+        "II": "2",
+        "III": "3",
+        "IV": "4",
+        "V": "5",
+        "VI": "6",
+        "VII": "7",
+        "VIII": "8",
+        "IX": "9",
+        "X": "10",
+        "XI": "11",
+        "XII": "12",
+    }
+
     def __init__(self):
-        self.patterns = {
-            # NEW: Combined Chapter + Section pattern
-            # Matches: "Chapter 4 Section 3", "Chapter IV Section 2", "Chap 4 Sec 3"
-            "chapter_section": re.compile(
-                r"(?:chapter|chap)[\s\-]*((?:[IVX]+|\d+))[\s,]+(?:section|sec)[\s\-]*(\d+)",
-                re.IGNORECASE
-            ),
-            
-            # Section patterns
-            "section": re.compile(
-                r"(?:section|sec)[\s\-]*(\d+)", 
-                re.IGNORECASE
-            ),
-            
-            # Chapter patterns
-            "chapter": re.compile(
-                r"(?:chapter|chap)[\s\-]*((?:[IVX]+|\d+))", 
-                re.IGNORECASE
-            ),
-            
-            # Recital patterns
-            "recital": re.compile(
-                r"(?:recital|regulation)(?:[\s\-]*(?:point|clause|part|no|number|num|#|\.))*[\s\-]*\(*(\d+)\)*", 
-                re.IGNORECASE
-            ),
-            
-            # Article patterns
-            "full_reference_dot": re.compile(r"article\s+(\d+)\.(\d+)\.([a-z])", re.IGNORECASE),
-            "full_reference_paren": re.compile(r"article\s+(\d+)\s*\((\d+)\)\s*\(([a-z])\)", re.IGNORECASE),
-            "article_subsection_dot": re.compile(r"article\s+(\d+)\.(\d+)", re.IGNORECASE),
-            "article_subsection_paren": re.compile(r"article\s+(\d+)\s*\((\d+)\)", re.IGNORECASE),
-            "article_only": re.compile(r"article\s+(\d+)(?![.\d(])", re.IGNORECASE),
+        self.keywords = {
+            "comparison": ["difference", "compare", "versus", "vs", "between"],
+            "conceptual": ["what", "explain", "define", "why", "how", "requirements", "rules"],
         }
-        
-        self.conceptual_keywords = [
-            "what is", "what are", "explain", "describe", "how does", "why", "when", 
-            "requirements", "rules", "provisions", "obligations", "rights", "principles", 
-            "definition", "tell me", "can i", "do i need"
-        ]
-        
-        self.comparison_keywords = [
-            "difference", "compare", "versus", "vs", "distinction", "similar", 
-            "different", "both", "either", "between"
-        ]
-    
+
+        self.patterns = {
+            "article_point": re.compile(
+                r"(?:art(?:icle)?|articl|aritcle)\s*(\d+)\s*(?:[.(]\s*(\d+)\s*[).]?)\s*(?:[.(]\s*([a-z])\s*[).]?)",
+                re.IGNORECASE,
+            ),
+            "article_subsection": re.compile(
+                r"(?:art(?:icle)?|articl|aritcle)\s*(\d+)\s*(?:[.(]\s*(\d+)\s*[).]?)",
+                re.IGNORECASE,
+            ),
+            "article_only": re.compile(r"(?:art(?:icle)?|articl|aritcle)\s*(\d+)", re.IGNORECASE),
+            "chapter": re.compile(r"(?:chap(?:ter)?|chp|chptr)\s*([ivxlcdm]+|\d+)", re.IGNORECASE),
+            "section": re.compile(r"(?:sec(?:tion)?|sction|secton|seciton)\s*([ivxlcdm]+|\d+)", re.IGNORECASE),
+            "recital": re.compile(r"(?:recital|whereas)\s*\(?\s*(\d+)\s*\)?", re.IGNORECASE),
+            "point_shorthand": re.compile(r"\b(\d+)\s*\.\s*([a-z])\b", re.IGNORECASE),
+        }
+
     def analyze(self, query: str) -> QueryAnalysis:
         try:
-            query_lower = query.lower().strip()
-            
-            # 1. NEW: Check Combined Chapter + Section (HIGHEST PRIORITY)
-            combined_match = self.patterns["chapter_section"].search(query)
-            if combined_match:
-                chapter_id = self._normalize_chapter_id(combined_match.group(1))
-                section_id = combined_match.group(2)
-                
-                logger.info(f"Detected combined query: Chapter {chapter_id}, Section {section_id}")
-                
+            q = " ".join(query.strip().split())
+            q_lower = q.lower()
+
+            if recital := self._match(self.patterns["recital"], q):
+                return QueryAnalysis(QueryType.RECITAL_LOOKUP, q, recital=recital[0], confidence=0.95)
+
+            chapter = self._normalized_ref(self._match(self.patterns["chapter"], q))
+            section = self._normalized_ref(self._match(self.patterns["section"], q))
+
+            if chapter and section:
                 return QueryAnalysis(
-                    query_type=QueryType.CHAPTER_SECTION_LOOKUP,
-                    original_query=query,
-                    chapter=chapter_id,
-                    section=section_id,
-                    confidence=0.95
-                )
-            
-            # 2. Check Section (standalone)
-            section_match = self.patterns["section"].search(query)
-            if section_match and self._is_section_query(query_lower):
-                return QueryAnalysis(
-                    query_type=QueryType.SECTION_LOOKUP,
-                    original_query=query,
-                    section=section_match.group(1),
-                    confidence=0.95
-                )
-            
-            # 3. Check Chapter (standalone)
-            chapter_match = self.patterns["chapter"].search(query)
-            if chapter_match and self._is_chapter_query(query_lower):
-                chapter_id = self._normalize_chapter_id(chapter_match.group(1))
-                return QueryAnalysis(
-                    query_type=QueryType.CHAPTER_LOOKUP,
-                    original_query=query,
-                    chapter=chapter_id,
-                    confidence=0.95
-                )
-            
-            # 4. Check Recitals
-            recital_match = self.patterns["recital"].search(query)
-            if recital_match:
-                return QueryAnalysis(
-                    query_type=QueryType.RECITAL_LOOKUP,
-                    original_query=query,
-                    recital=recital_match.group(1),
-                    confidence=0.95
+                    QueryType.CHAPTER_SECTION_LOOKUP,
+                    q,
+                    chapter=chapter,
+                    section=section,
+                    confidence=0.95,
                 )
 
-            # 5. Check Exact Article References
-            exact_result = self._check_exact_reference(query)
-            if exact_result:
-                return exact_result
-            
-            # 6. Check Comparison
-            if any(keyword in query_lower for keyword in self.comparison_keywords):
-                articles = self._extract_article_numbers(query)
+            if point_match := self._match(self.patterns["article_point"], q):
                 return QueryAnalysis(
-                    query_type=QueryType.COMPARISON,
-                    original_query=query,
-                    article=articles[0] if articles else None,
-                    confidence=0.8,
-                    extracted_concepts=articles
+                    QueryType.EXACT_REFERENCE,
+                    q,
+                    article=point_match[0],
+                    subsection=point_match[1],
+                    point=point_match[2].lower(),
+                    confidence=0.95,
                 )
-            
-            # 7. Check Conceptual
-            if any(keyword in query_lower for keyword in self.conceptual_keywords):
-                articles = self._extract_article_numbers(query)
+
+            if sub_match := self._match(self.patterns["article_subsection"], q):
                 return QueryAnalysis(
-                    query_type=QueryType.CONCEPTUAL,
-                    original_query=query,
-                    article=articles[0] if articles else None,
-                    confidence=0.7,
-                    extracted_concepts=articles
+                    QueryType.EXACT_REFERENCE,
+                    q,
+                    article=sub_match[0],
+                    subsection=sub_match[1],
+                    confidence=0.92,
                 )
-            
-            # 8. Default Fallback
-            return QueryAnalysis(
-                query_type=QueryType.GENERAL,
-                original_query=query,
-                confidence=0.5
-            )
-        
-        except Exception as e:
-            logger.error(f"Query analysis failed: {e}")
-            raise QueryRoutingError(f"Failed to analyze query: {e}")
-    
-    def _is_section_query(self, query_lower: str) -> bool:
-        """Check if this is truly asking for a section"""
-        section_indicators = [
-            "section start", "start from", "which article", 
-            "show section", "what is section", "display section",
-            "section contain", "in section", "section has"
-        ]
-        return any(indicator in query_lower for indicator in section_indicators)
-    
-    def _is_chapter_query(self, query_lower: str) -> bool:
-        """Check if this is truly asking for a chapter"""
-        chapter_indicators = [
-            "chapter start", "start from", "which article",
-            "show chapter", "what is chapter", "display chapter",
-            "chapter contain", "in chapter", "chapter has"
-        ]
-        return any(indicator in query_lower for indicator in chapter_indicators)
-    
-    def _normalize_chapter_id(self, chapter_str: str) -> str:
-        """Convert Roman numerals to Arabic for consistent lookup"""
-        roman_to_arabic = {
-            'I': '1', 'II': '2', 'III': '3', 'IV': '4', 'V': '5',
-            'VI': '6', 'VII': '7', 'VIII': '8', 'IX': '9', 'X': '10',
-            'XI': '11'
-        }
-        return roman_to_arabic.get(chapter_str.upper(), chapter_str)
-    
-    def _check_exact_reference(self, query: str) -> Optional[QueryAnalysis]:
-        """Check all article regex patterns"""
-        
-        # Full Reference (Art 1.2.a)
-        match = self.patterns["full_reference_dot"].search(query)
-        if match:
-             return QueryAnalysis(
-                 query_type=QueryType.EXACT_REFERENCE,
-                 original_query=query,
-                 article=match.group(1),
-                 subsection=match.group(2),
-                 point=match.group(3),
-                 confidence=0.95
-             )
-        
-        # Full Reference (Art 1(2)(a))
-        match = self.patterns["full_reference_paren"].search(query)
-        if match:
-             return QueryAnalysis(
-                 query_type=QueryType.EXACT_REFERENCE,
-                 original_query=query,
-                 article=match.group(1),
-                 subsection=match.group(2),
-                 point=match.group(3),
-                 confidence=0.95
-             )
 
-        # Subsection (Art 1.2)
-        match = self.patterns["article_subsection_dot"].search(query)
-        if match:
-            return QueryAnalysis(
-                query_type=QueryType.EXACT_REFERENCE,
-                original_query=query,
-                article=match.group(1),
-                subsection=match.group(2),
-                confidence=0.9
-            )
+            # Handles follow-up queries like "give 2.a portion" after history-aware rewrite.
+            if shorthand := self._match(self.patterns["point_shorthand"], q):
+                return QueryAnalysis(
+                    QueryType.EXACT_REFERENCE,
+                    q,
+                    subsection=shorthand[0],
+                    point=shorthand[1].lower(),
+                    confidence=0.75,
+                )
 
-        # Subsection (Art 1(2))
-        match = self.patterns["article_subsection_paren"].search(query)
-        if match:
-            return QueryAnalysis(
-                query_type=QueryType.EXACT_REFERENCE,
-                original_query=query,
-                article=match.group(1),
-                subsection=match.group(2),
-                confidence=0.9
-            )
+            if article := self._match(self.patterns["article_only"], q):
+                query_type = QueryType.ARTICLE_LOOKUP if any(
+                    token in q_lower for token in ["show", "start", "from", "text", "give", "which"]
+                ) else QueryType.CONCEPTUAL
+                return QueryAnalysis(query_type, q, article=article[0], confidence=0.85)
 
-        # Article Only (Art 1)
-        match = self.patterns["article_only"].search(query)
-        if match:
-            query_lower = query.lower()
-            lookup_phrases = ["show", "display", "get", "find", "retrieve", "read"]
-            q_type = QueryType.ARTICLE_LOOKUP if any(p in query_lower for p in lookup_phrases) else QueryType.CONCEPTUAL
-            
-            return QueryAnalysis(
-                query_type=q_type, 
-                original_query=query, 
-                article=match.group(1), 
-                confidence=0.85 if q_type == QueryType.ARTICLE_LOOKUP else 0.7
-            )
+            if chapter:
+                return QueryAnalysis(QueryType.CHAPTER_LOOKUP, q, chapter=chapter, confidence=0.9)
 
-        return None
+            if section:
+                return QueryAnalysis(QueryType.SECTION_LOOKUP, q, section=section, confidence=0.9)
 
-    def _extract_article_numbers(self, query: str) -> list:
-        """Extract all article numbers"""
-        pattern = re.compile(r"article\s+(\d+)", re.IGNORECASE)
-        matches = pattern.findall(query)
-        return list(set(matches))
+            if any(keyword in q_lower for keyword in self.keywords["comparison"]):
+                return QueryAnalysis(QueryType.COMPARISON, q, confidence=0.75)
+
+            if any(keyword in q_lower for keyword in self.keywords["conceptual"]):
+                return QueryAnalysis(QueryType.CONCEPTUAL, q, confidence=0.65)
+
+            return QueryAnalysis(QueryType.GENERAL, q, confidence=0.5)
+
+        except Exception as exc:
+            logger.error(f"Query analysis failed: {exc}")
+            raise QueryRoutingError(f"Failed to analyze query: {exc}") from exc
+
+    def _match(self, pattern: re.Pattern, text: str) -> Optional[tuple[str, ...]]:
+        match = pattern.search(text)
+        return match.groups() if match else None
+
+    def _normalized_ref(self, match_result: Optional[tuple[str, ...]]) -> Optional[str]:
+        if not match_result:
+            return None
+        raw = match_result[0].upper()
+        return self.ROMAN_TO_ARABIC.get(raw, raw)
