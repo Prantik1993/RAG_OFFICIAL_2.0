@@ -1,27 +1,33 @@
-class GDPRAppException(Exception):
-    """Base exception for the application."""
+"""
+Custom exceptions for Legal RAG system
+"""
+
+
+class LegalRAGException(Exception):
+    """Base exception"""
     pass
 
-class DataIngestionError(GDPRAppException):
-    """Raised when PDF loading or splitting fails."""
+
+class ParsingError(LegalRAGException):
+    """Raised when PDF parsing fails"""
     pass
 
-class VectorStoreError(GDPRAppException):
-    """Raised when FAISS save/load operations fail."""
+
+class DataIngestionError(LegalRAGException):
+    """Raised when data ingestion fails"""
     pass
 
-class RAGChainError(GDPRAppException):
-    """Raised when the LLM generation or retrieval fails."""
+
+class VectorStoreError(LegalRAGException):
+    """Raised when vector store operations fail"""
     pass
 
-class ParsingError(GDPRAppException):
-    """Raised when document structure parsing fails."""
+
+class RAGChainError(LegalRAGException):
+    """Raised when RAG chain execution fails"""
     pass
 
-class QueryRoutingError(GDPRAppException):
-    """Raised when query analysis fails."""
-    pass
 
-class MetadataError(GDPRAppException):
-    """Raised when metadata operations fail."""
+class QueryAnalysisError(LegalRAGException):
+    """Raised when query analysis fails"""
     pass

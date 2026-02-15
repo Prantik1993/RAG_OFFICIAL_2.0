@@ -1,0 +1,222 @@
+"""
+LLM-Powered Query Analyzer
+Uses GPT to understand user intent instead of brittle regex patterns.
+
+Handles:
+- Natural language queries with typos
+- Complex questions like "What is chapter 2 section III first article"
+- Direct questions about content
+- Comparison and conceptual queries
+"""
+
+from typing import Optional
+from dataclasses import dataclass
+from enum import Enum
+import json
+
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+
+from src.config import Config
+from src.logger import get_logger
+
+logger = get_logger("LLMQueryAnalyzer")
+
+
+class QueryIntent(str, Enum):
+    """Types of queries the system can handle"""
+    EXACT_LOOKUP = "exact_lookup"  # "What is Article 15.1.a"
+    RANGE_QUERY = "range_query"    # "Show articles in Chapter 2 Section 1"
+    CONCEPTUAL = "conceptual"       # "What are consent requirements"
+    COMPARISON = "comparison"       # "Compare Article 6 and 7"
+    GENERAL = "general"             # General questions about the document
+
+
+@dataclass
+class QueryAnalysis:
+    """Result of query analysis"""
+    intent: QueryIntent
+    original_query: str
+    
+    # Extracted references
+    recital: Optional[str] = None
+    chapter: Optional[str] = None
+    section: Optional[str] = None
+    article: Optional[str] = None
+    point: Optional[str] = None
+    subpoint: Optional[str] = None
+    
+    # For range queries
+    start_article: Optional[str] = None
+    end_article: Optional[str] = None
+    
+    # Confidence
+    confidence: float = 0.0
+    
+    # Explanation from LLM
+    reasoning: str = ""
+    
+    def has_exact_reference(self) -> bool:
+        """Check if query has specific reference"""
+        return any([
+            self.recital,
+            self.article,
+            self.point,
+            self.subpoint
+        ])
+    
+    def to_filter_dict(self) -> dict:
+        """Convert to metadata filter for vector store"""
+        filter_dict = {}
+        
+        if self.recital:
+            filter_dict["recital"] = self.recital
+        if self.chapter:
+            filter_dict["chapter"] = self.chapter
+        if self.section:
+            filter_dict["section"] = self.section
+        if self.article:
+            filter_dict["article"] = self.article
+        if self.point:
+            filter_dict["point"] = self.point
+        if self.subpoint:
+            filter_dict["subpoint"] = self.subpoint
+        
+        return filter_dict
+
+
+class LLMQueryAnalyzer:
+    """
+    Uses GPT to understand user queries with high accuracy.
+    No brittle regex patterns - handles typos, natural language, etc.
+    """
+    
+    def __init__(self):
+        self.llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
+            api_key=Config.OPENAI_API_KEY
+        )
+        
+        self.analysis_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a query analyzer for a GDPR legal assistant.
+
+If the query explicitly references GDPR structure
+   (recital, article, chapter, section, point, GDPR):
+   - Treat it as a VALID legal query
+   - Set confidence HIGH (0.6–1.0)
+   - Even if the query is short (e.g. "recital 78 summary")
+
+If the query is about GDPR concepts or rights:
+   - Treat as valid
+   - Set confidence HIGH (0.6–1.0)
+
+If the query is casual chat, jokes, greetings, nonsense,
+   or unrelated to GDPR or law:
+   - Set confidence LOW (0.0–0.2)
+   - Keep intent as "general"     
+
+The document has this structure:
+- Recitals: (1), (2), ..., (108)
+- Chapters: CHAPTER I, II, III, IV, ... (Roman numerals)
+- Sections: Section 1, 2, 3, ... (within chapters)
+- Articles: Article 1, 2, 3, ... (within sections or chapters)
+- Points: 1., 2., 3., ... (within articles)
+- Subpoints: (a), (b), (c), ... (within points)
+
+Examples:
+- "What is Article 15.1.a?" → exact lookup: Article 15, Point 1, Subpoint a
+- "Chapter 2 Section 3 start from which article" → range query: Chapter II, Section 3
+- "Show me recital 42" → exact lookup: Recital 42
+- "What are consent requirements?" → conceptual query
+- "Compare Article 6 and 7" → comparison query
+
+IMPORTANT RULES:
+1. Convert Roman numerals (I, II, III, IV, V) to Arabic (1, 2, 3, 4, 5)
+2. Handle typos and variations (e.g., "section III" = "section 3")
+3. For "Article X.Y.Z", extract: article=X, point=Y, subpoint=Z
+4. For "first article in Chapter X Section Y", set: chapter=X, section=Y, intent=range_query
+
+Respond ONLY with valid JSON in this format:
+{{
+    "intent": "exact_lookup|range_query|conceptual|comparison|general",
+    "recital": "number or null",
+    "chapter": "number or null",
+    "section": "number or null",
+    "article": "number or null",
+    "point": "number or null",
+    "subpoint": "letter or null",
+    "start_article": "number or null (for range queries)",
+    "confidence": 0.0-1.0,
+    "reasoning": "brief explanation of your analysis"
+}}"""),
+            ("human", "{query}")
+        ])
+    
+    def analyze(self, query: str) -> QueryAnalysis:
+        """Analyze user query using LLM"""
+        try:
+            logger.info(f"Analyzing query: '{query}'")
+            
+            # Call LLM
+            chain = self.analysis_prompt | self.llm
+            response = chain.invoke({"query": query})
+            
+            # Parse JSON response
+            content = response.content.strip()
+            
+            # Handle markdown code blocks
+            if content.startswith("```"):
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+            
+            result = json.loads(content)
+            
+            # Create QueryAnalysis object
+            analysis = QueryAnalysis(
+                intent=QueryIntent(result["intent"]),
+                original_query=query,
+                recital=result.get("recital"),
+                chapter=self._normalize_chapter(result.get("chapter")),
+                section=result.get("section"),
+                article=result.get("article"),
+                point=result.get("point"),
+                subpoint=result.get("subpoint"),
+                start_article=result.get("start_article"),
+                confidence=result.get("confidence", 0.8),
+                reasoning=result.get("reasoning", "")
+            )
+            
+            logger.info(
+                f"Query analysis complete: intent={analysis.intent.value}, "
+                f"confidence={analysis.confidence:.2f}"
+            )
+            
+            return analysis
+        
+        except Exception as e:
+            logger.error(f"Query analysis failed: {e}", exc_info=True)
+            
+            # Fallback to general query
+            return QueryAnalysis(
+                intent=QueryIntent.GENERAL,
+                original_query=query,
+                confidence=0.3,
+                reasoning=f"Analysis failed: {str(e)}"
+            )
+    
+    def _normalize_chapter(self, chapter: Optional[str]) -> Optional[str]:
+        """Convert Roman numerals to Arabic numbers"""
+        if not chapter:
+            return None
+        
+        roman_map = {
+            'I': '1', 'II': '2', 'III': '3', 'IV': '4', 'V': '5',
+            'VI': '6', 'VII': '7', 'VIII': '8', 'IX': '9', 'X': '10',
+            'XI': '11', 'XII': '12'
+        }
+        
+        chapter_upper = str(chapter).upper().strip()
+        return roman_map.get(chapter_upper, chapter)
