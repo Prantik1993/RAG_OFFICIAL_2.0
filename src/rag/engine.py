@@ -29,8 +29,16 @@ class EnhancedRAGEngine:
     
     def __init__(self, vectorstore):
         try:
+<<<<<<< HEAD
             logger.info("Initializing Enhanced RAG Engine")
             
+=======
+            logger.info("Initializing RAG Engine")
+
+            if not Config.OPENAI_API_KEY:
+                raise RAGChainError("OPENAI_API_KEY is required to run the RAG engine")
+
+>>>>>>> 1838656519ae40225f10abc5643dde520f2e3fee
             self.llm = ChatOpenAI(
                 model=Config.LLM_MODEL,
                 temperature=0,
