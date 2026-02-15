@@ -34,6 +34,9 @@ class RAGEngine:
         try:
             logger.info("Initializing RAG Engine")
 
+            if not Config.OPENAI_API_KEY:
+                raise RAGChainError("OPENAI_API_KEY is required to run the RAG engine")
+
             self.llm = ChatOpenAI(
                 model=Config.LLM_MODEL,
                 temperature=0,
