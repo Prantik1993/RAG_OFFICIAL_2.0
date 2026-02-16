@@ -133,16 +133,7 @@ Context:
         )
     
     def query(self, query: str, session_id: str = "default") -> dict:
-        """
-        Execute a RAG query with guardrails and caching.
         
-        Args:
-            query: User's question
-            session_id: Session identifier for conversation history
-        
-        Returns:
-            Dictionary with answer, sources, and metadata
-        """
         try:
             # STEP 1: Validate input with guardrails
             is_safe, reason = self.safety.validate_input(query)
@@ -168,10 +159,10 @@ Context:
                 logger.info("Returning cached response")
                 return cached_response
             
-            # STEP 4: Check query confidence
+            # STEP 4: Check query confidence (UPDATED THRESHOLD)
             analysis = self.smart_retriever.analyzer.analyze(query)
-            if analysis.confidence < 0.4:
-                logger.warning("Low confidence query – generation skipped at engine level")
+            if analysis.confidence < 0.3:
+                logger.warning("Low confidence query - generation skipped at engine level")
                 return {
                     "answer": (
                         "I can only help with questions related to the GDPR "

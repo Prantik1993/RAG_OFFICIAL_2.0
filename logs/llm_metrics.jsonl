@@ -1,7 +1,0 @@
-{"timestamp": "2026-02-16T13:04:41.186186", "model": "gpt-4o-mini", "operation": "query_analysis", "tokens": 685, "latency_ms": 3214.4439220428467, "success": true, "error": null}
-{"timestamp": "2026-02-16T13:04:44.430815", "model": "gpt-4o-mini", "operation": "query_analysis", "tokens": 687, "latency_ms": 3133.6019039154053, "success": true, "error": null}
-{"timestamp": "2026-02-16T13:05:10.131079", "model": "gpt-4o-mini", "operation": "query_analysis", "tokens": 674, "latency_ms": 3118.2005405426025, "success": true, "error": null}
-{"timestamp": "2026-02-16T13:05:54.776920", "model": "gpt-4o-mini", "operation": "query_analysis", "tokens": 688, "latency_ms": 3694.901466369629, "success": true, "error": null}
-{"timestamp": "2026-02-16T13:05:57.531883", "model": "gpt-4o-mini", "operation": "query_analysis", "tokens": 688, "latency_ms": 2667.2961711883545, "success": true, "error": null}
-{"timestamp": "2026-02-16T13:07:00.210177", "model": "gpt-4o-mini", "operation": "query_analysis", "tokens": 676, "latency_ms": 2256.122827529907, "success": true, "error": null}
-{"timestamp": "2026-02-16T13:07:03.286758", "model": "gpt-4o-mini", "operation": "query_analysis", "tokens": 676, "latency_ms": 2957.9193592071533, "success": true, "error": null}

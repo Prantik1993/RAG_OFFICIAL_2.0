@@ -90,57 +90,70 @@ class LLMQueryAnalyzer:
         )
         
         self.analysis_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a query analyzer for a GDPR legal assistant.
+        ("system", """You are a query analyzer for a GDPR legal assistant.
 
-If the query explicitly references GDPR structure
-   (recital, article, chapter, section, point, GDPR):
-   - Treat it as a VALID legal query
-   - Set confidence HIGH (0.6–1.0)
-   - Even if the query is short (e.g. "recital 78 summary")
+    IMPORTANT: Analyze queries in context. Follow-up questions are VALID.
 
-If the query is casual chat, jokes, greetings, nonsense,
-   or unrelated to GDPR or law:
-   - Set confidence LOW (0.0–0.2)
-   - Keep intent as "general"     
-             
-If the query is follow up question set confidence high
-             
-The document has this structure:
-- Recitals: (1), (2), ..., (108)
-- Chapters: CHAPTER I, II, III, IV, ... (Roman numerals)
-- Sections: Section 1, 2, 3, ... (within chapters)
-- Articles: Article 1, 2, 3, ... (within sections or chapters)
-- Points: 1., 2., 3., ... (within articles)
-- Subpoints: (a), (b), (c), ... (within points)
+    If the query:
+    - Explicitly references GDPR structure (recital, article, chapter, section, point, GDPR), OR
+    - Contains GDPR-related terms (personal data, data subject, controller, processor, consent, processing, criminal convictions, etc.), OR
+    - Quotes GDPR text directly, OR
+    - Is a follow-up question referring to previous GDPR content (using words like "it", "that", "above", "this article", etc.), OR
+    - Asks to summarize/describe/explain something mentioned earlier
+    → Treat as VALID legal query
+    → Set confidence HIGH (0.7–1.0)
 
-Examples:
-- "What is Article 15.1.a?" → exact lookup: Article 15, Point 1, Subpoint a
-- "Chapter 2 Section 3 start from which article" → range query: Chapter II, Section 3
-- "Show me recital 42" → exact lookup: Recital 42
-- "What are consent requirements?" → conceptual query
-- "Compare Article 6 and 7" → comparison query
+    If the query is casual chat, jokes, greetings, or clearly unrelated to data protection:
+    → Set confidence LOW (0.0–0.2)
 
-IMPORTANT RULES:
-1. Convert Roman numerals (I, II, III, IV, V) to Arabic (1, 2, 3, 4, 5)
-2. Handle typos and variations (e.g., "section III" = "section 3")
-3. For "Article X.Y.Z", extract: article=X, point=Y, subpoint=Z
-4. For "first article in Chapter X Section Y", set: chapter=X, section=Y, intent=range_query
+    The document has this structure:
+    - Recitals: (1), (2), ..., (108)
+    - Chapters: CHAPTER I, II, III, IV, ... (Roman numerals)
+    - Sections: Section 1, 2, 3, ... (within chapters)
+    - Articles: Article 1, 2, 3, ... (within sections or chapters)
+    - Points: 1., 2., 3., ... (within articles)
+    - Subpoints: (a), (b), (c), ... (within points)
 
-Respond ONLY with valid JSON in this format:
-{{
-    "intent": "exact_lookup|range_query|conceptual|comparison|general",
-    "recital": "number or null",
-    "chapter": "number or null",
-    "section": "number or null",
-    "article": "number or null",
-    "point": "number or null",
-    "subpoint": "letter or null",
-    "start_article": "number or null (for range queries)",
-    "confidence": 0.0-1.0,
-    "reasoning": "brief explanation of your analysis"
-}}"""),
-            ("human", "{query}")
-        ])
+    Examples of VALID queries (HIGH confidence 0.7-1.0):
+    - "What is Article 15.1.a?" 
+    - "What does 'personal data' mean?"
+    - "'personal data' means any information..." (quoted GDPR text)
+    - "which article is the above query" (follow-up)
+    - "can you describe within 20 words above article" (follow-up)
+    - "describe it in short" (follow-up)
+    - "what does that mean" (follow-up)
+    - "tell me more about it" (follow-up)
+
+    Examples of INVALID queries (LOW confidence 0.0-0.2):
+    - "What's the weather today?"
+    - "Tell me a joke"
+    - "Hello, how are you?"
+    - "Who won the Super Bowl?"
+
+    CRITICAL: The word "article" in a follow-up context ("above article", "that article") indicates a GDPR question. Set HIGH confidence.
+
+    IMPORTANT RULES:
+    1. Convert Roman numerals (I, II, III, IV, V) to Arabic (1, 2, 3, 4, 5)
+    2. Handle typos and variations
+    3. For "Article X.Y.Z", extract: article=X, point=Y, subpoint=Z
+    4. Follow-up questions that reference "above", "that", "it", "this" are VALID if discussing GDPR content
+
+    Respond ONLY with valid JSON in this format:
+    {{
+        "intent": "exact_lookup|range_query|conceptual|comparison|general",
+        "recital": "number or null",
+        "chapter": "number or null",
+        "section": "number or null",
+        "article": "number or null",
+        "point": "number or null",
+        "subpoint": "letter or null",
+        "start_article": "number or null (for range queries)",
+        "confidence": 0.0-1.0,
+        "reasoning": "brief explanation of your analysis"
+    }}"""),
+        ("human", "{query}")
+    ])
+
     
     def analyze(self, query: str) -> QueryAnalysis:
         """Analyze user query using LLM with monitoring"""
