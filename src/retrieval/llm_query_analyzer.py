@@ -2,12 +2,14 @@ from typing import Optional
 from dataclasses import dataclass
 from enum import Enum
 import json
+import time
 
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.config import Config
 from src.logger import get_logger
+from src.monitoring.llm_tracker import tracker
 
 logger = get_logger("LLMQueryAnalyzer")
 
@@ -141,13 +143,25 @@ Respond ONLY with valid JSON in this format:
         ])
     
     def analyze(self, query: str) -> QueryAnalysis:
-        """Analyze user query using LLM"""
+        """Analyze user query using LLM with monitoring"""
+        start_time = time.time()
+        
         try:
             logger.info(f"Analyzing query: '{query}'")
             
             # Call LLM
             chain = self.analysis_prompt | self.llm
             response = chain.invoke({"query": query})
+            
+            # Track the call
+            usage = response.response_metadata.get('token_usage', {})
+            tracker.track(
+                model=self.llm.model_name,
+                operation="query_analysis",
+                start_time=start_time,
+                success=True,
+                tokens=usage.get('total_tokens', 0)
+            )
             
             # Parse JSON response
             content = response.content.strip()
@@ -185,6 +199,15 @@ Respond ONLY with valid JSON in this format:
         
         except Exception as e:
             logger.error(f"Query analysis failed: {e}", exc_info=True)
+            
+            # Track failed call
+            tracker.track(
+                model=self.llm.model_name,
+                operation="query_analysis",
+                start_time=start_time,
+                success=False,
+                error=str(e)
+            )
             
             # Fallback to general query
             return QueryAnalysis(

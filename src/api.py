@@ -17,12 +17,16 @@ from src.rag.engine import EnhancedRAGEngine
 from src.ingestion.pipeline import EnhancedIngestionPipeline
 from src.config import Config
 from src.logger import get_logger
+from src.middleware.rate_limiter import RateLimiter
+from src.monitoring.llm_tracker import tracker
+from src.caching.query_cache import query_cache
 
 logger = get_logger("API")
 
 # Global instances
 engine: EnhancedRAGEngine | None = None
 vectorstore_manager: VectorStoreManager | None = None
+rate_limiter = RateLimiter(requests_per_minute=10, requests_per_hour=100)
 
 
 @asynccontextmanager
@@ -50,7 +54,7 @@ async def lifespan(app: FastAPI):
         
         # Initialize RAG engine
         engine = EnhancedRAGEngine(vectorstore)
-        logger.info("API Server ready")
+        logger.info("API Server ready with guardrails, rate limiting, caching, and monitoring")
         
         yield
         
@@ -94,17 +98,26 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
-    """Main chat endpoint"""
+    """Main chat endpoint with rate limiting and caching"""
     if not engine:
         raise HTTPException(
             status_code=503,
             detail="RAG Engine not initialized"
         )
     
+    # Check rate limit
+    allowed, message = rate_limiter.check_limit(request.session_id)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=message,
+            headers={"Retry-After": "60"}
+        )
+    
     try:
         logger.info(f"Query: '{request.query[:100]}...' | Session: {request.session_id}")
         
-        # Execute RAG query
+        # Execute RAG query (caching happens inside engine)
         response = engine.query(
             query=request.query,
             session_id=request.session_id
@@ -167,6 +180,19 @@ async def get_stats():
         "message": "FAISS index loaded",
         "version": Config.API_VERSION
     }
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """LLM usage metrics"""
+    return tracker.get_stats()
+
+
+@app.post("/cache/clear")
+async def clear_cache():
+    """Clear query cache (admin endpoint)"""
+    query_cache.clear()
+    return {"message": "Cache cleared successfully"}
 
 
 @app.get("/")

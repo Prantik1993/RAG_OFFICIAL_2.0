@@ -18,6 +18,8 @@ from src.retrieval.smart_retriever import SmartRetriever
 from src.config import Config
 from src.logger import get_logger
 from src.exceptions import RAGChainError
+from src.guardrails.safety import SafetyGuardrails
+from src.caching.query_cache import query_cache
 
 logger = get_logger("EnhancedRAGEngine")
 
@@ -31,8 +33,6 @@ class EnhancedRAGEngine:
         try:
             logger.info("Initializing Enhanced RAG Engine")
             
-            logger.info("Initializing RAG Engine")
-
             if not Config.OPENAI_API_KEY:
                 raise RAGChainError("OPENAI_API_KEY is required to run the RAG engine")
 
@@ -45,7 +45,10 @@ class EnhancedRAGEngine:
             self.smart_retriever = SmartRetriever(vectorstore)
             self._session_store: dict[str, ChatMessageHistory] = {}
             
-            logger.info("Enhanced RAG Engine ready")
+            # Add guardrails
+            self.safety = SafetyGuardrails()
+            
+            logger.info("Enhanced RAG Engine ready with guardrails and caching")
         
         except Exception as e:
             logger.critical(f"RAG Engine initialization failed: {e}")
@@ -131,7 +134,7 @@ Context:
     
     def query(self, query: str, session_id: str = "default") -> dict:
         """
-        Execute a RAG query.
+        Execute a RAG query with guardrails and caching.
         
         Args:
             query: User's question
@@ -141,16 +144,31 @@ Context:
             Dictionary with answer, sources, and metadata
         """
         try:
-            # Validate input
-            if not query or not query.strip():
-                raise ValueError("Query cannot be empty")
+            # STEP 1: Validate input with guardrails
+            is_safe, reason = self.safety.validate_input(query)
+            if not is_safe:
+                logger.warning(f"Unsafe query rejected: {reason}")
+                return {
+                    "answer": (
+                        "I cannot process this query. "
+                        "Please ask questions about GDPR regulations."
+                    ),
+                    "context": [],
+                }
             
+            # STEP 2: Basic validation
             if len(query) > Config.MAX_QUERY_LENGTH:
                 raise ValueError(f"Query too long (max {Config.MAX_QUERY_LENGTH} characters)")
             
             logger.info(f"Processing query: '{query[:100]}...'")
             
-
+            # STEP 3: Check cache FIRST (before expensive LLM calls)
+            cached_response = query_cache.get(query)
+            if cached_response:
+                logger.info("Returning cached response")
+                return cached_response
+            
+            # STEP 4: Check query confidence
             analysis = self.smart_retriever.analyzer.analyze(query)
             if analysis.confidence < 0.4:
                 logger.warning("Low confidence query – generation skipped at engine level")
@@ -162,13 +180,28 @@ Context:
                     "context": [],
                 }
 
-            # Build and execute chain
+            # STEP 5: Build and execute chain
             chain = self._build_chain()
             
             response = chain.invoke(
                 {"input": query},
                 config={"configurable": {"session_id": session_id}},
             )
+            
+            # STEP 6: Validate output
+            answer = response.get("answer", "")
+            if not self.safety.validate_output(answer):
+                logger.error("Unsafe output detected")
+                return {
+                    "answer": (
+                        "I apologize, but I encountered an issue generating "
+                        "a safe response. Please try rephrasing your question."
+                    ),
+                    "context": [],
+                }
+            
+            # STEP 7: Cache the response
+            query_cache.set(query, response)
             
             logger.info("Query processed successfully")
             return response
