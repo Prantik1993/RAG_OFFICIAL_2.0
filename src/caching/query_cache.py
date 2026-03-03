@@ -1,54 +1,55 @@
 """
-Simple in-memory query cache
+Query Cache
+===========
+Simple in-memory LRU cache keyed on normalised query text.
+Thread-safe for the single-process FastAPI use-case.
 """
+
+from __future__ import annotations
+
 import hashlib
+from collections import OrderedDict
 from typing import Optional
+
+import src.config as cfg
 from src.logger import get_logger
 
-logger = get_logger("QueryCache")
+log = get_logger("QueryCache")
 
 
 class QueryCache:
-    """Simple LRU cache for query responses"""
-    
-    def __init__(self, max_size: int = 1000):
-        self.max_size = max_size
-        self._cache = {}
-    
-    def _normalize(self, query: str) -> str:
-        """Normalize query for cache key"""
-        return ' '.join(query.lower().strip().split())
-    
-    def _key(self, query: str) -> str:
-        """Generate cache key"""
-        normalized = self._normalize(query)
-        return hashlib.sha256(normalized.encode()).hexdigest()
-    
+
+    def __init__(self, max_size: int = cfg.CACHE_MAX_SIZE) -> None:
+        self._max  = max_size
+        self._data: OrderedDict[str, dict] = OrderedDict()
+
+    # ── public ────────────────────────────────────────────────────────────────
     def get(self, query: str) -> Optional[dict]:
-        """Get cached response"""
         key = self._key(query)
-        if key in self._cache:
-            logger.info("Cache HIT")
-            return self._cache[key]
-        logger.debug("Cache MISS")
+        if key in self._data:
+            self._data.move_to_end(key)   # refresh LRU position
+            log.debug("Cache HIT")
+            return self._data[key]
+        log.debug("Cache MISS")
         return None
-    
-    def set(self, query: str, response: dict):
-        """Cache response"""
+
+    def set(self, query: str, value: dict) -> None:
         key = self._key(query)
-        
-        # Simple LRU: remove oldest if full
-        if len(self._cache) >= self.max_size:
-            oldest = next(iter(self._cache))
-            del self._cache[oldest]
-        
-        self._cache[key] = response
-    
-    def clear(self):
-        """Clear cache"""
-        self._cache.clear()
-        logger.info("Cache cleared")
+        if key in self._data:
+            self._data.move_to_end(key)
+        self._data[key] = value
+        if len(self._data) > self._max:
+            self._data.popitem(last=False)   # evict oldest
 
+    def clear(self) -> None:
+        self._data.clear()
+        log.info("Cache cleared")
 
-# Global cache
-query_cache = QueryCache(max_size=1000)
+    def __len__(self) -> int:
+        return len(self._data)
+
+    # ── private ───────────────────────────────────────────────────────────────
+    @staticmethod
+    def _key(query: str) -> str:
+        normalised = " ".join(query.lower().strip().split())
+        return hashlib.sha256(normalised.encode()).hexdigest()

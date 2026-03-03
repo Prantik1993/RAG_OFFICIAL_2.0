@@ -1,105 +1,72 @@
 """
-Enhanced Ingestion Pipeline
-Uses the new hierarchical parser.
+Ingestion Pipeline
+==================
+1. Parse PDF -> hierarchical LegalChunks
+2. Split oversized chunks (preserving metadata)
+3. Return LangChain Documents ready for embedding
 """
 
-from typing import List
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from src.ingestion.parser import EnhancedLegalParser
-from src.config import Config
+import src.config as cfg
+from src.exceptions import IngestionError
+from src.ingestion.parser import GDPRParser
 from src.logger import get_logger
-from src.exceptions import DataIngestionError
 
-logger = get_logger("EnhancedIngestion")
+log = get_logger("Ingestion")
 
 
-class EnhancedIngestionPipeline:
-    """
-    Modern ingestion pipeline with hierarchical parsing.
-    
-    Process:
-    1. Parse PDF with full structure extraction
-    2. Create chunks with rich metadata
-    3. Optional: Split large chunks while preserving metadata
-    """
-    
-    def __init__(self):
-        self.parser = EnhancedLegalParser()
-        self.splitter = RecursiveCharacterTextSplitter(
-            chunk_size=Config.CHUNK_SIZE,
-            chunk_overlap=Config.CHUNK_OVERLAP,
+class IngestionPipeline:
+
+    def __init__(self) -> None:
+        self._parser = GDPRParser()
+        self._splitter = RecursiveCharacterTextSplitter(
+            chunk_size=cfg.CHUNK_SIZE,
+            chunk_overlap=cfg.CHUNK_OVERLAP,
+            separators=["\n\n", "\n", ". ", " "],
         )
-    
-    def run(self, pdf_path: str = None) -> List[Document]:
-        """
-        Run the complete ingestion pipeline.
-        
-        Returns:
-            List of LangChain Documents ready for embedding
-        """
+
+    def run(self, pdf_path: Optional[str | Path] = None) -> list[Document]:
+        path = Path(pdf_path) if pdf_path else cfg.DATA_DIR / "CELEX_32016R0679_EN_TXT.pdf"
+        if not path.exists():
+            raise IngestionError(f"PDF not found: {path}")
+
         try:
-            pdf_path = pdf_path or Config.PDF_FILE
-            logger.info(f"Starting enhanced ingestion for: {pdf_path}")
-            
-            # Step 1: Parse with hierarchy
-            chunks = self.parser.parse(pdf_path)
-            logger.info(f"Parsed {len(chunks)} hierarchical chunks")
-            
-            # Step 2: Convert to LangChain Documents
-            documents = [chunk.to_document() for chunk in chunks]
-            
-            # Step 3: Split large documents while preserving metadata
-            final_documents = []
-            for doc in documents:
-                # If document is too large, split it
-                if len(doc.page_content) > Config.CHUNK_SIZE:
-                    split_docs = self.splitter.split_documents([doc])
-                    # Preserve metadata in splits
-                    for split_doc in split_docs:
-                        split_doc.metadata = dict(doc.metadata)
-                    final_documents.extend(split_docs)
-                else:
-                    final_documents.append(doc)
-            
-            logger.info(
-                f"Ingestion complete: "
-                f"{len(chunks)} base chunks → "
-                f"{len(final_documents)} final documents"
-            )
-            
-            # Log statistics
-            self._log_statistics(final_documents)
-            
-            return final_documents
-        
-        except Exception as e:
-            logger.error(f"Ingestion failed: {e}", exc_info=True)
-            raise DataIngestionError(f"Ingestion pipeline failed: {e}")
-    
-    def _log_statistics(self, documents: List[Document]):
-        """Log helpful statistics about parsed content"""
-        recitals = set()
-        chapters = set()
-        sections = set()
-        articles = set()
-        
-        for doc in documents:
-            meta = doc.metadata
-            if meta.get("recital"):
-                recitals.add(meta["recital"])
-            if meta.get("chapter"):
-                chapters.add(meta["chapter"])
-            if meta.get("section"):
-                sections.add(meta["section"])
-            if meta.get("article"):
-                articles.add(meta["article"])
-        
-        logger.info(
-            f"Content statistics: "
-            f"{len(recitals)} recitals, "
-            f"{len(chapters)} chapters, "
-            f"{len(sections)} sections, "
-            f"{len(articles)} articles"
+            log.info(f"Ingesting: {path}")
+            chunks = self._parser.parse(path)
+            docs   = [c.to_document() for c in chunks]
+            final  = self._split_large(docs)
+            self._log_stats(final)
+            return final
+
+        except IngestionError:
+            raise
+        except Exception as exc:
+            raise IngestionError(f"Pipeline failed: {exc}") from exc
+
+    def _split_large(self, docs: list[Document]) -> list[Document]:
+        result: list[Document] = []
+        for doc in docs:
+            if len(doc.page_content) > cfg.CHUNK_SIZE:
+                splits = self._splitter.split_documents([doc])
+                for s in splits:
+                    s.metadata = dict(doc.metadata)
+                result.extend(splits)
+            else:
+                result.append(doc)
+        return result
+
+    @staticmethod
+    def _log_stats(docs: list[Document]) -> None:
+        recitals = {d.metadata["recital"] for d in docs if "recital" in d.metadata}
+        articles = {d.metadata["article"] for d in docs if "article" in d.metadata}
+        log.info(
+            f"Ingestion done -- {len(docs)} docs | "
+            f"{len(recitals)} recitals | {len(articles)} articles"
         )

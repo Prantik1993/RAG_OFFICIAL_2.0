@@ -1,242 +1,238 @@
+"""
+GDPR Hierarchical Parser
+========================
+Extracts the full CHAPTER → SECTION → ARTICLE → POINT → SUBPOINT
+structure from the CELEX PDF and produces richly-annotated LangChain
+Documents.  No LLM involved — pure deterministic regex.
+
+Key fixes over v3:
+- POINT_PATTERN anchored to article context only (avoids footnote false-positives)
+- Footnote / page-header lines are explicitly skipped
+- Each chunk carries a clean `reference_path` for citation
+"""
+
+from __future__ import annotations
+
 import re
-from typing import List, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
 
-from src.logger import get_logger
 from src.exceptions import ParsingError
+from src.logger import get_logger
 
-logger = get_logger("EnhancedParser")
+log = get_logger("Parser")
+
+# ── Compiled patterns ─────────────────────────────────────────────────────────
+_RE_RECITAL   = re.compile(r'^\(\s*(\d{1,3})\s*\)\s+\S')          # (1) text…
+_RE_CHAPTER   = re.compile(r'^CHAPTER\s+([IVX]+)\s*$', re.I)
+_RE_SECTION   = re.compile(r'^Section\s+(\d+)\s*$', re.I)
+_RE_ARTICLE   = re.compile(r'^Article\s+(\d+)\s*$', re.I)
+_RE_POINT     = re.compile(r'^(\d+)\.\s+\S')                        # "1. Text…"
+_RE_SUBPOINT  = re.compile(r'^\(([a-z])\)\s+\S')                    # "(a) text…"
+
+# Lines to skip entirely
+_RE_SKIP = re.compile(
+    r'^(L\s+\d+/|EN\s+Official|4\.5\.2016|OJ\s+[CL]|\d+\s*$)',
+    re.I,
+)
+
+_ROMAN = {
+    "I": "1", "II": "2", "III": "3", "IV": "4", "V": "5",
+    "VI": "6", "VII": "7", "VIII": "8", "IX": "9", "X": "10",
+    "XI": "11", "XII": "12",
+}
+
+
+# ── Data model ────────────────────────────────────────────────────────────────
+@dataclass
+class _Ctx:
+    """Mutable parse context shared across lines."""
+    in_recitals: bool = True
+    chapter:  Optional[str] = None
+    section:  Optional[str] = None
+    article:  Optional[str] = None
+    point:    Optional[str] = None
+    # section is only active while inside the same chapter
+    section_chapter: Optional[str] = None
 
 
 @dataclass
 class LegalChunk:
-    content: str
-    recital: Optional[str] = None
-    chapter: Optional[str] = None
-    section: Optional[str] = None
-    article: Optional[str] = None
-    point: Optional[str] = None
+    content:  str
+    page:     int
+    recital:  Optional[str] = None
+    chapter:  Optional[str] = None
+    section:  Optional[str] = None
+    article:  Optional[str] = None
+    point:    Optional[str] = None
     subpoint: Optional[str] = None
-    page: int = 0
 
-    def to_metadata(self) -> dict:
-        meta = {"page": self.page}
-
+    # ── derived ───────────────────────────────────────────────────────────────
+    @property
+    def reference_path(self) -> str:
+        parts: list[str] = []
         if self.recital:
-            meta["recital"] = self.recital
-            meta["level"] = "recital"
-        elif self.chapter:
-            meta["chapter"] = self.chapter
-            meta["level"] = "chapter"
-
-            if self.section:
-                meta["section"] = self.section
-                meta["level"] = "section"
-
-            if self.article:
-                meta["article"] = self.article
-                meta["level"] = "article"
-
-            if self.point:
-                meta["point"] = self.point
-                meta["level"] = "point"
-
-            if self.subpoint:
-                meta["subpoint"] = self.subpoint
-                meta["level"] = "subpoint"
-
-        ref = []
-        if self.recital:
-            ref.append(f"Recital {self.recital}")
+            parts.append(f"Recital {self.recital}")
         else:
             if self.chapter:
-                ref.append(f"Chapter {self.chapter}")
+                parts.append(f"Chapter {self.chapter}")
             if self.section:
-                ref.append(f"Section {self.section}")
+                parts.append(f"Section {self.section}")
             if self.article:
-                ref.append(f"Article {self.article}")
+                parts.append(f"Article {self.article}")
             if self.point:
-                ref.append(f"Point {self.point}")
+                parts.append(f"Point {self.point}")
             if self.subpoint:
-                ref.append(f"Subpoint {self.subpoint}")
+                parts.append(f"Subpoint ({self.subpoint})")
+        return " → ".join(parts) or "Document"
 
-        meta["reference_path"] = " → ".join(ref) if ref else "Document"
-        return meta
+    @property
+    def level(self) -> str:
+        if self.recital:  return "recital"
+        if self.subpoint: return "subpoint"
+        if self.point:    return "point"
+        if self.article:  return "article"
+        if self.section:  return "section"
+        if self.chapter:  return "chapter"
+        return "document"
 
     def to_document(self) -> Document:
-        return Document(page_content=self.content, metadata=self.to_metadata())
-
-
-class EnhancedLegalParser:
-    """
-    GDPR / CELEX compliant hierarchical parser
-    """
-
-    RECITAL_PATTERN = re.compile(r'^\(\s*(\d+)\s*\)')
-    CHAPTER_PATTERN = re.compile(r'^CHAPTER\s+([IVX]+)', re.IGNORECASE)
-    SECTION_PATTERN = re.compile(r'^Section\s+(\d+)', re.IGNORECASE)
-    ARTICLE_PATTERN = re.compile(r'^Article\s+(\d+)', re.IGNORECASE)
-    POINT_PATTERN = re.compile(r'^(\d+)\.\s+')
-    SUBPOINT_PATTERN = re.compile(r'^\(([a-z])\)')
-
-    def __init__(self):
-        self.reset_context()
-
-    def _roman_to_arabic(self, roman: str) -> str:
-        roman_map = {
-            'I': '1', 'II': '2', 'III': '3', 'IV': '4', 'V': '5',
-            'VI': '6', 'VII': '7', 'VIII': '8', 'IX': '9', 'X': '10',
-            'XI': '11', 'XII': '12'
+        meta: dict = {
+            "page":           self.page,
+            "level":          self.level,
+            "reference_path": self.reference_path,
         }
-        return roman_map.get(roman.upper(), roman)
+        for attr in ("recital", "chapter", "section", "article", "point", "subpoint"):
+            val = getattr(self, attr)
+            if val is not None:
+                meta[attr] = val
+        return Document(page_content=self.content.strip(), metadata=meta)
 
-    def reset_context(self):
-        self.current_chapter = None
-        self.current_section = None
-        self.current_article = None
-        self.current_point = None
-        self.in_recital_phase = True
-        self.section_active = False
 
-    def parse(self, pdf_path: str) -> List[LegalChunk]:
+# ── Parser ────────────────────────────────────────────────────────────────────
+class GDPRParser:
+    """
+    Deterministic, regex-only hierarchical parser for the GDPR CELEX PDF.
+    Produces one LegalChunk per structural unit.
+    """
+
+    def parse(self, pdf_path: str | Path) -> list[LegalChunk]:
         try:
-            pages = PyPDFLoader(pdf_path).load()
-        except Exception as e:
-            raise ParsingError(f"Failed to load PDF: {e}")
+            pages = PyPDFLoader(str(pdf_path)).load()
+        except Exception as exc:
+            raise ParsingError(f"Cannot load PDF '{pdf_path}': {exc}") from exc
 
-        chunks: List[LegalChunk] = []
-        current_chunk: Optional[LegalChunk] = None
+        chunks: list[LegalChunk] = []
+        current: Optional[LegalChunk] = None
+        ctx = _Ctx()
 
-        for page in pages:
-            page_num = page.metadata.get("page", 0)
-            lines = page.page_content.split("\n")
+        def _flush() -> None:
+            nonlocal current
+            if current and current.content.strip():
+                chunks.append(current)
+            current = None
 
-            for line in lines:
-                line = line.strip()
-                if not line:
+        for page_doc in pages:
+            page_num: int = page_doc.metadata.get("page", 0)
+            for raw_line in page_doc.page_content.splitlines():
+                line = raw_line.strip()
+                if not line or _RE_SKIP.match(line):
                     continue
 
-                # ---- EXIT RECITAL PHASE ----
-                if self.in_recital_phase and self.CHAPTER_PATTERN.match(line):
-                    self.in_recital_phase = False
-                    if current_chunk:
-                        chunks.append(current_chunk)
-                        current_chunk = None
+                # ── Exit recital phase on first CHAPTER heading ───────────────
+                if ctx.in_recitals and _RE_CHAPTER.match(line):
+                    ctx.in_recitals = False
 
-                # ---- RECITAL ----
-                if self.in_recital_phase:
-                    m = self.RECITAL_PATTERN.match(line)
+                # ── RECITAL ───────────────────────────────────────────────────
+                if ctx.in_recitals:
+                    m = _RE_RECITAL.match(line)
                     if m:
-                        if current_chunk:
-                            chunks.append(current_chunk)
-                        current_chunk = LegalChunk(
-                            content=line,
-                            recital=m.group(1),
-                            page=page_num
+                        _flush()
+                        current = LegalChunk(
+                            content=line, page=page_num, recital=m.group(1)
                         )
-                    elif current_chunk:
-                        current_chunk.content += " " + line
+                    elif current:
+                        current.content += " " + line
                     continue
 
-                # ---- CHAPTER ----
-                chapter_match = self.CHAPTER_PATTERN.match(line)
-                if chapter_match:
-                    if current_chunk:
-                        chunks.append(current_chunk)
-
-                    self.current_chapter = self._roman_to_arabic(chapter_match.group(1))
-                    self.current_section = None
-                    self.section_active = False
-                    self.current_article = None
-                    self.current_point = None
-
-                    current_chunk = LegalChunk(
-                        content=line,
-                        chapter=self.current_chapter,
-                        page=page_num
+                # ── CHAPTER ───────────────────────────────────────────────────
+                m = _RE_CHAPTER.match(line)
+                if m:
+                    _flush()
+                    ctx.chapter  = _ROMAN.get(m.group(1).upper(), m.group(1))
+                    ctx.section  = None
+                    ctx.article  = None
+                    ctx.point    = None
+                    ctx.section_chapter = None
+                    current = LegalChunk(
+                        content=line, page=page_num, chapter=ctx.chapter
                     )
                     continue
 
-                # ---- SECTION ----
-                section_match = self.SECTION_PATTERN.match(line)
-                if section_match:
-                    if current_chunk:
-                        chunks.append(current_chunk)
-
-                    self.current_section = section_match.group(1)
-                    self.section_active = True
-                    self.current_article = None
-                    self.current_point = None
-
-                    current_chunk = LegalChunk(
-                        content=line,
-                        chapter=self.current_chapter,
-                        section=self.current_section,
-                        page=page_num
+                # ── SECTION ───────────────────────────────────────────────────
+                m = _RE_SECTION.match(line)
+                if m:
+                    _flush()
+                    ctx.section  = m.group(1)
+                    ctx.article  = None
+                    ctx.point    = None
+                    ctx.section_chapter = ctx.chapter
+                    current = LegalChunk(
+                        content=line, page=page_num,
+                        chapter=ctx.chapter, section=ctx.section,
                     )
                     continue
 
-                # ---- ARTICLE ----
-                article_match = self.ARTICLE_PATTERN.match(line)
-                if article_match:
-                    if current_chunk:
-                        chunks.append(current_chunk)
-
-                    self.current_article = article_match.group(1)
-                    self.current_point = None
-
-                    current_chunk = LegalChunk(
-                        content=line,
-                        chapter=self.current_chapter,
-                        section=self.current_section if self.section_active else None,
-                        article=self.current_article,
-                        page=page_num
+                # ── ARTICLE ───────────────────────────────────────────────────
+                m = _RE_ARTICLE.match(line)
+                if m:
+                    _flush()
+                    ctx.article = m.group(1)
+                    ctx.point   = None
+                    # section only carried if same chapter
+                    sec = ctx.section if ctx.section_chapter == ctx.chapter else None
+                    current = LegalChunk(
+                        content=line, page=page_num,
+                        chapter=ctx.chapter, section=sec, article=ctx.article,
                     )
                     continue
 
-                # ---- POINT ----
-                point_match = self.POINT_PATTERN.match(line)
-                if point_match:
-                    if current_chunk:
-                        chunks.append(current_chunk)
+                # ── POINT (only inside an article) ────────────────────────────
+                if ctx.article:
+                    m = _RE_POINT.match(line)
+                    if m:
+                        _flush()
+                        ctx.point = m.group(1)
+                        sec = ctx.section if ctx.section_chapter == ctx.chapter else None
+                        current = LegalChunk(
+                            content=line, page=page_num,
+                            chapter=ctx.chapter, section=sec,
+                            article=ctx.article, point=ctx.point,
+                        )
+                        continue
 
-                    self.current_point = point_match.group(1)
+                # ── SUBPOINT (only inside a point) ────────────────────────────
+                if ctx.point:
+                    m = _RE_SUBPOINT.match(line)
+                    if m:
+                        _flush()
+                        sec = ctx.section if ctx.section_chapter == ctx.chapter else None
+                        current = LegalChunk(
+                            content=line, page=page_num,
+                            chapter=ctx.chapter, section=sec,
+                            article=ctx.article, point=ctx.point,
+                            subpoint=m.group(1),
+                        )
+                        continue
 
-                    current_chunk = LegalChunk(
-                        content=line,
-                        chapter=self.current_chapter,
-                        section=self.current_section if self.section_active else None,
-                        article=self.current_article,
-                        point=self.current_point,
-                        page=page_num
-                    )
-                    continue
+                # ── continuation ──────────────────────────────────────────────
+                if current:
+                    current.content += "\n" + line
 
-                # ---- SUBPOINT ----
-                subpoint_match = self.SUBPOINT_PATTERN.match(line)
-                if subpoint_match:
-                    if current_chunk:
-                        chunks.append(current_chunk)
-
-                    current_chunk = LegalChunk(
-                        content=line,
-                        chapter=self.current_chapter,
-                        section=self.current_section if self.section_active else None,
-                        article=self.current_article,
-                        point=self.current_point,
-                        subpoint=subpoint_match.group(1),
-                        page=page_num
-                    )
-                    continue
-
-                # ---- CONTENT ----
-                if current_chunk:
-                    current_chunk.content += "\n" + line
-
-        if current_chunk:
-            chunks.append(current_chunk)
-
-        logger.info(f"Parsed {len(chunks)} hierarchical chunks")
+        _flush()
+        log.info(f"Parsed {len(chunks)} chunks from '{pdf_path}'")
         return chunks

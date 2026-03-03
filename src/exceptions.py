@@ -1,33 +1,27 @@
 """
-Custom exceptions for Legal RAG system
+Domain exceptions — one per layer so callers can catch precisely.
 """
 
 
-class LegalRAGException(Exception):
-    """Base exception"""
-    pass
+class LegalRAGError(Exception):
+    """Base for all domain errors."""
 
 
-class ParsingError(LegalRAGException):
-    """Raised when PDF parsing fails"""
-    pass
+class ParsingError(LegalRAGError):
+    """PDF / text extraction failed."""
 
 
-class DataIngestionError(LegalRAGException):
-    """Raised when data ingestion fails"""
-    pass
+class IngestionError(LegalRAGError):
+    """Ingestion pipeline failed."""
 
 
-class VectorStoreError(LegalRAGException):
-    """Raised when vector store operations fail"""
-    pass
+class VectorStoreError(LegalRAGError):
+    """FAISS operations failed."""
 
 
-class RAGChainError(LegalRAGException):
-    """Raised when RAG chain execution fails"""
-    pass
+class RetrievalError(LegalRAGError):
+    """Retrieval / query analysis failed."""
 
 
-class QueryAnalysisError(LegalRAGException):
-    """Raised when query analysis fails"""
-    pass
+class RAGEngineError(LegalRAGError):
+    """End-to-end RAG pipeline failed."""

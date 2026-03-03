@@ -1,96 +1,71 @@
 """
 Vector Store Manager
-Handles FAISS vector store creation and management.
+====================
+Wraps FAISS creation, persistence, and loading.
+Uses HuggingFace embeddings (no OpenAI cost for embeddings).
 """
 
-import os
-from typing import List, Optional
+from __future__ import annotations
 
-from langchain_huggingface import HuggingFaceEmbeddings
+from pathlib import Path
+from typing import Optional
+
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
+from langchain_huggingface import HuggingFaceEmbeddings
 
-from src.config import Config
-from src.logger import get_logger
+import src.config as cfg
 from src.exceptions import VectorStoreError
+from src.logger import get_logger
 
-logger = get_logger("VectorStoreManager")
+log = get_logger("VectorStore")
 
 
 class VectorStoreManager:
-    """
-    Manages FAISS vector store operations.
-    """
-    
-    def __init__(self):
+
+    def __init__(self) -> None:
+        log.info(f"Loading embeddings: {cfg.EMBEDDING_MODEL}")
         try:
-            logger.info(f"Loading embeddings: {Config.EMBEDDING_MODEL}")
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name=Config.EMBEDDING_MODEL
-            )
-            logger.info("Embeddings loaded successfully")
-        except Exception as e:
-            logger.critical(f"Failed to load embeddings: {e}")
-            raise VectorStoreError(f"Embedding initialization failed: {e}")
-    
-    def load_vectorstore(self) -> Optional[FAISS]:
-        """Load existing FAISS index from disk"""
-        index_path = os.path.join(Config.STORAGE_DIR, "index.faiss")
-        
-        if not os.path.exists(index_path):
-            logger.info("No existing FAISS index found")
+            self._emb = HuggingFaceEmbeddings(model_name=cfg.EMBEDDING_MODEL)
+        except Exception as exc:
+            raise VectorStoreError(f"Embedding init failed: {exc}") from exc
+        log.info("Embeddings ready")
+
+    # ── public ────────────────────────────────────────────────────────────────
+    def load(self) -> Optional[FAISS]:
+        index_file = cfg.STORE_DIR / "index.faiss"
+        if not index_file.exists():
+            log.info("No existing FAISS index")
             return None
-        
         try:
-            logger.info(f"Loading FAISS index from {Config.STORAGE_DIR}")
-            return FAISS.load_local(
-                Config.STORAGE_DIR,
-                self.embeddings,
-                allow_dangerous_deserialization=True
+            vs = FAISS.load_local(
+                str(cfg.STORE_DIR),
+                self._emb,
+                allow_dangerous_deserialization=True,
             )
-        except Exception as e:
-            logger.error(f"Failed to load FAISS index: {e}")
-            raise VectorStoreError(f"Failed to load vector store: {e}")
-    
-    def create_vectorstore(self, documents: List[Document]) -> FAISS:
-        """Create new FAISS index from documents"""
-        if not documents:
-            raise VectorStoreError("Cannot create vector store from empty documents")
-        
+            log.info(f"Loaded FAISS index from {cfg.STORE_DIR}")
+            return vs
+        except Exception as exc:
+            raise VectorStoreError(f"FAISS load failed: {exc}") from exc
+
+    def create(self, docs: list[Document]) -> FAISS:
+        if not docs:
+            raise VectorStoreError("No documents provided")
         try:
-            logger.info(f"Creating FAISS index from {len(documents)} documents")
-            
-            vectorstore = FAISS.from_documents(
-                documents=documents,
-                embedding=self.embeddings
-            )
-            
-            # Save to disk
-            os.makedirs(Config.STORAGE_DIR, exist_ok=True)
-            vectorstore.save_local(Config.STORAGE_DIR)
-            
-            logger.info("FAISS index created and saved successfully")
-            return vectorstore
-        
-        except Exception as e:
-            logger.error(f"Vector store creation failed: {e}")
-            raise VectorStoreError(f"Failed to create vector store: {e}")
-    
-    def update_vectorstore(self, vectorstore: FAISS, new_documents: List[Document]) -> FAISS:
-        """Add new documents to existing FAISS index"""
-        if not new_documents:
-            logger.warning("No new documents to add")
-            return vectorstore
-        
-        try:
-            logger.info(f"Adding {len(new_documents)} documents to FAISS index")
-            
-            vectorstore.add_documents(new_documents)
-            vectorstore.save_local(Config.STORAGE_DIR)
-            
-            logger.info("FAISS index updated successfully")
-            return vectorstore
-        
-        except Exception as e:
-            logger.error(f"Vector store update failed: {e}")
-            raise VectorStoreError(f"Failed to update vector store: {e}")
+            log.info(f"Building FAISS index from {len(docs)} documents…")
+            vs = FAISS.from_documents(docs, self._emb)
+            cfg.STORE_DIR.mkdir(parents=True, exist_ok=True)
+            vs.save_local(str(cfg.STORE_DIR))
+            log.info("FAISS index saved")
+            return vs
+        except Exception as exc:
+            raise VectorStoreError(f"FAISS create failed: {exc}") from exc
+
+    def load_or_create(self, docs_fn) -> FAISS:
+        """Load existing index or call docs_fn() to build one."""
+        vs = self.load()
+        if vs is not None:
+            return vs
+        log.info("Building new index…")
+        docs = docs_fn()
+        return self.create(docs)

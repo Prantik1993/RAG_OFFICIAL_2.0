@@ -1,0 +1,41 @@
+# ----------------------------
+# Core API Framework
+# ----------------------------
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+
+# ----------------------------
+# LLM & LangChain
+# ----------------------------
+langchain==0.2.16
+langchain-openai==0.1.23
+langchain-community==0.2.16
+langchain-core==0.2.38
+
+# ----------------------------
+# Embeddings
+# ----------------------------
+langchain-huggingface==0.0.3
+sentence-transformers==2.6.1
+torch>=2.1.0
+
+# ----------------------------
+# Vector Store
+# ----------------------------
+faiss-cpu==1.7.4
+
+# ----------------------------
+# PDF Processing
+# ----------------------------
+pypdf==4.2.0
+
+# ----------------------------
+# Environment Variables
+# ----------------------------
+python-dotenv==1.0.1
+
+# ----------------------------
+# Streamlit UI
+# ----------------------------
+streamlit==1.33.0
+requests==2.31.0

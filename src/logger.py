@@ -1,41 +1,37 @@
 """
-Logging utility
+Logging — rotating file + console, one call to get_logger().
 """
 
-import logging
-import os
-from logging.handlers import RotatingFileHandler
+from __future__ import annotations
 
-LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(LOG_DIR, "app.log")
+import logging
+import sys
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+import src.config as cfg
+
+cfg.LOG_DIR.mkdir(parents=True, exist_ok=True)
+_LOG_FILE = cfg.LOG_DIR / "app.log"
+
+_FMT_FILE    = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+_FMT_CONSOLE = "%(levelname)-8s | %(name)s | %(message)s"
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Get configured logger"""
     logger = logging.getLogger(name)
+    if logger.handlers:
+        return logger
+
     logger.setLevel(logging.INFO)
-    
-    if not logger.handlers:
-        # File handler
-        file_handler = RotatingFileHandler(
-            LOG_FILE, 
-            maxBytes=5*1024*1024,  # 5MB
-            backupCount=3
-        )
-        file_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        file_handler.setFormatter(file_formatter)
-        
-        # Console handler
-        console_handler = logging.StreamHandler()
-        console_formatter = logging.Formatter(
-            '%(levelname)s: %(message)s'
-        )
-        console_handler.setFormatter(console_formatter)
-        
-        logger.addHandler(file_handler)
-        logger.addHandler(console_handler)
-    
+
+    fh = RotatingFileHandler(_LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+    fh.setFormatter(logging.Formatter(_FMT_FILE))
+
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setFormatter(logging.Formatter(_FMT_CONSOLE))
+
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+    logger.propagate = False
     return logger

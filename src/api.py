@@ -1,216 +1,131 @@
 """
-FastAPI Backend for Legal RAG System
+FastAPI Backend
+===============
+Clean, minimal — one chat endpoint, health, stats, cache clear.
 """
 
-import sys
-import os
+from __future__ import annotations
+
 from contextlib import asynccontextmanager
 
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
-import uvicorn
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.vector_store.manager import VectorStoreManager
-from src.rag.engine import EnhancedRAGEngine
-from src.ingestion.pipeline import EnhancedIngestionPipeline
-from src.config import Config
+import src.config as cfg
+from src.ingestion.pipeline import IngestionPipeline
 from src.logger import get_logger
 from src.middleware.rate_limiter import RateLimiter
-from src.monitoring.llm_tracker import tracker
-from src.caching.query_cache import query_cache
+from src.rag.engine import RAGEngine
+from src.vector_store.manager import VectorStoreManager
 
-logger = get_logger("API")
+log = get_logger("API")
 
-# Global instances
-engine: EnhancedRAGEngine | None = None
-vectorstore_manager: VectorStoreManager | None = None
-rate_limiter = RateLimiter(requests_per_minute=10, requests_per_hour=100)
+# ── Globals ───────────────────────────────────────────────────────────────────
+_engine:       RAGEngine | None       = None
+_rate_limiter: RateLimiter            = RateLimiter()
 
 
+# ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan management"""
-    global engine, vectorstore_manager
-    
+    global _engine
+    log.info("Server starting…")
     try:
-        logger.info("Starting API Server...")
-        
-        # Initialize vector store manager
-        vectorstore_manager = VectorStoreManager()
-        
-        # Load or create vector store
-        vectorstore = vectorstore_manager.load_vectorstore()
-        
-        if vectorstore is None:
-            logger.warning("Vector store not found. Running ingestion...")
-            pipeline = EnhancedIngestionPipeline()
-            documents = pipeline.run()
-            vectorstore = vectorstore_manager.create_vectorstore(documents)
-            logger.info("Ingestion completed successfully")
-        else:
-            logger.info("Loaded existing vector store")
-        
-        # Initialize RAG engine
-        engine = EnhancedRAGEngine(vectorstore)
-        logger.info("API Server ready with guardrails, rate limiting, caching, and monitoring")
-        
-        yield
-        
-        logger.info("API Server shutting down")
-    
-    except Exception as e:
-        logger.critical(f"Server startup failed: {e}", exc_info=True)
-        raise RuntimeError(f"Application startup failed: {e}")
+        vs_mgr   = VectorStoreManager()
+        pipeline = IngestionPipeline()
+        vs       = vs_mgr.load_or_create(pipeline.run)
+        _engine  = RAGEngine(vs)
+        log.info("Server ready")
+    except Exception as exc:
+        log.critical(f"Startup failed: {exc}", exc_info=True)
+        raise
+    yield
+    log.info("Server shutdown")
 
 
+# ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
-    title=Config.API_TITLE,
-    version=Config.API_VERSION,
-    description=Config.API_DESCRIPTION,
-    lifespan=lifespan
+    title=cfg.API_TITLE,
+    version=cfg.API_VERSION,
+    lifespan=lifespan,
 )
 
 
-# --- Request/Response Models ---
-
+# ── Models ────────────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=Config.MAX_QUERY_LENGTH)
-    session_id: str = Field(default="default_session", min_length=1, max_length=100)
-    
+    query:      str = Field(..., min_length=1, max_length=cfg.MAX_QUERY_LENGTH)
+    session_id: str = Field(default="default", min_length=1, max_length=100)
+
     @field_validator("query")
     @classmethod
-    def validate_query(cls, v: str) -> str:
+    def strip_query(cls, v: str) -> str:
         v = v.strip()
         if not v:
-            raise ValueError("Query cannot be empty")
+            raise ValueError("query must not be blank")
         return v
 
 
 class ChatResponse(BaseModel):
-    answer: str
-    sources: list[int]
+    answer:   str
+    sources:  list[int]
     metadata: dict
 
 
-# --- Endpoints ---
-
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
-    """Main chat endpoint with rate limiting and caching"""
-    if not engine:
-        raise HTTPException(
-            status_code=503,
-            detail="RAG Engine not initialized"
-        )
-    
-    # Check rate limit
-    allowed, message = rate_limiter.check_limit(request.session_id)
+async def chat(req: ChatRequest):
+    if _engine is None:
+        raise HTTPException(503, "Engine not ready")
+
+    allowed, msg = _rate_limiter.check(req.session_id)
     if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail=message,
-            headers={"Retry-After": "60"}
-        )
-    
+        raise HTTPException(429, msg, headers={"Retry-After": "60"})
+
     try:
-        logger.info(f"Query: '{request.query[:100]}...' | Session: {request.session_id}")
-        
-        # Execute RAG query (caching happens inside engine)
-        response = engine.query(
-            query=request.query,
-            session_id=request.session_id
-        )
-        
-        # Extract answer and context
-        answer = response.get("answer", "")
-        context_docs = response.get("context", [])
-        
-        # Extract page numbers (0-indexed internally)
-        pages = sorted({
-            int(doc.metadata.get("page", 0)) + 1
-            for doc in context_docs
-        })
-        
-        # Build metadata
-        metadata = {
-            "total_sources": len(context_docs),
-            "reference_paths": [
-                doc.metadata.get("reference_path", "Unknown")
-                for doc in context_docs[:5]
-            ]
-        }
-        
-        logger.info(f"Response generated | sources={len(context_docs)}")
-        
-        return ChatResponse(
-            answer=answer,
-            sources=pages,
-            metadata=metadata
-        )
-    
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    
-    except Exception as e:
-        logger.error(f"Error processing query: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        result = _engine.query(req.query, session_id=req.session_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        log.error(f"Query error: {exc}", exc_info=True)
+        raise HTTPException(500, "Internal error")
+
+    answer   = result.get("answer", "")
+    ctx_docs = result.get("context", [])
+    pages    = sorted({int(d.metadata.get("page", 0)) + 1 for d in ctx_docs})
+    refs     = [d.metadata.get("reference_path", "—") for d in ctx_docs[:5]]
+
+    return ChatResponse(
+        answer=answer,
+        sources=pages,
+        metadata={"total_sources": len(ctx_docs), "references": refs},
+    )
 
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy" if engine else "degraded",
-        "engine_ready": engine is not None,
-        "vectorstore_ready": vectorstore_manager is not None,
-        "version": Config.API_VERSION
-    }
-
-
-@app.get("/stats")
-async def get_stats():
-    """Statistics endpoint"""
-    if not vectorstore_manager:
-        raise HTTPException(status_code=503, detail="Vector store not initialized")
-    
-    return {
-        "indexed": True,
-        "message": "FAISS index loaded",
-        "version": Config.API_VERSION
-    }
+async def health():
+    return {"status": "ok" if _engine else "degraded", "engine": _engine is not None}
 
 
 @app.get("/metrics")
-async def get_metrics():
-    """LLM usage metrics"""
-    return tracker.get_stats()
+async def metrics():
+    if _engine is None:
+        raise HTTPException(503, "Engine not ready")
+    return _engine.tracker.stats()
 
 
 @app.post("/cache/clear")
-async def clear_cache():
-    """Clear query cache (admin endpoint)"""
-    query_cache.clear()
-    return {"message": "Cache cleared successfully"}
+async def cache_clear():
+    if _engine is None:
+        raise HTTPException(503, "Engine not ready")
+    _engine._cache.clear()
+    return {"message": "cache cleared"}
 
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
-    return {
-        "name": Config.API_TITLE,
-        "version": Config.API_VERSION,
-        "description": Config.API_DESCRIPTION,
-        "docs": "/docs",
-        "health": "/health"
-    }
+    return {"name": cfg.API_TITLE, "version": cfg.API_VERSION, "docs": "/docs"}
 
 
 if __name__ == "__main__":
-    uvicorn.run(
-        app,
-        host=Config.API_HOST,
-        port=Config.API_PORT,
-        log_level="info"
-    )
+    uvicorn.run("src.api:app", host=cfg.API_HOST, port=cfg.API_PORT, reload=False)
