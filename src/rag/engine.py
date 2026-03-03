@@ -1,20 +1,5 @@
-"""
-RAG Engine
-==========
-Single-responsibility: receive a query, retrieve context, generate answer.
-
-Design decisions:
-- One LLM call per user query (no routing LLM)
-- Tight system prompt that prevents hallucination
-- Conversation history via LangChain RunnableWithMessageHistory
-- Input validated by SafetyGuardrails before hitting the chain
-- Response cached after first generation
-"""
-
 from __future__ import annotations
-
 from typing import Any
-
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_community.chat_message_histories import ChatMessageHistory

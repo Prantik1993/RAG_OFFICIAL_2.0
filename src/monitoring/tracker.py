@@ -1,12 +1,5 @@
-"""
-LLM Usage Tracker
-=================
-Lightweight — records latency and call counts in memory,
-appends JSONL to disk for offline analysis.
-"""
 
 from __future__ import annotations
-
 import json
 import time
 from dataclasses import asdict, dataclass
