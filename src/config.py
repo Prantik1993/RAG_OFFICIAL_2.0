@@ -23,6 +23,7 @@ OPENAI_API_KEY: str = os.environ["OPENAI_API_KEY"]   # raises if missing
 # ── Model settings ────────────────────────────────────────────────────────────
 LLM_MODEL        = os.getenv("LLM_MODEL",        "gpt-4o-mini")
 EMBEDDING_MODEL  = os.getenv("EMBEDDING_MODEL",  "sentence-transformers/all-MiniLM-L6-v2")
+RERANKER_MODEL   = os.getenv("RERANKER_MODEL",   "cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 # ── Ingestion ─────────────────────────────────────────────────────────────────
 CHUNK_SIZE    = int(os.getenv("CHUNK_SIZE",    "1500"))
@@ -36,7 +37,7 @@ RETRIEVAL_K_FETCH = int(os.getenv("RETRIEVAL_K_FETCH", "20"))   # fetch more, re
 API_HOST    = os.getenv("API_HOST",    "0.0.0.0")
 API_PORT    = int(os.getenv("API_PORT", "8000"))
 API_TITLE   = "GDPR Legal RAG API"
-API_VERSION = "4.0"
+API_VERSION = "4.1"
 
 MAX_QUERY_LENGTH = 2000
 

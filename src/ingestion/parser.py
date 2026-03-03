@@ -1,4 +1,18 @@
+"""
+GDPR Hierarchical Parser
+========================
+Extracts the full CHAPTER → SECTION → ARTICLE → POINT → SUBPOINT
+structure from the CELEX PDF and produces richly-annotated LangChain
+Documents.  No LLM involved — pure deterministic regex.
+
+Key fixes over v3:
+- POINT_PATTERN anchored to article context only (avoids footnote false-positives)
+- Footnote / page-header lines are explicitly skipped
+- Each chunk carries a clean `reference_path` for citation
+"""
+
 from __future__ import annotations
+
 import re
 from dataclasses import dataclass, field
 from pathlib import Path

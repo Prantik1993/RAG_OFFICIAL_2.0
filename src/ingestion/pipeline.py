@@ -1,9 +1,19 @@
+"""
+Ingestion Pipeline
+==================
+1. Parse PDF -> hierarchical LegalChunks
+2. Split oversized chunks (preserving metadata)
+3. Return LangChain Documents ready for embedding
+"""
 
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Optional
+
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 import src.config as cfg
 from src.exceptions import IngestionError
 from src.ingestion.parser import GDPRParser

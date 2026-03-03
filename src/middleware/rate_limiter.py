@@ -1,3 +1,7 @@
+"""
+Rate Limiter  (token-bucket, per session_id)
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict

@@ -1,5 +1,11 @@
+"""
+FastAPI Backend  (v4.1)
+"""
+
 from __future__ import annotations
+
 from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -13,21 +19,19 @@ from src.vector_store.manager import VectorStoreManager
 
 log = get_logger("API")
 
-# ── Globals ───────────────────────────────────────────────────────────────────
-_engine:       RAGEngine | None       = None
-_rate_limiter: RateLimiter            = RateLimiter()
+_engine:       RAGEngine | None = None
+_rate_limiter: RateLimiter      = RateLimiter()
 
 
-# ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine
     log.info("Server starting…")
     try:
-        vs_mgr   = VectorStoreManager()
-        pipeline = IngestionPipeline()
-        vs       = vs_mgr.load_or_create(pipeline.run)
-        _engine  = RAGEngine(vs)
+        vs_mgr      = VectorStoreManager()
+        pipeline    = IngestionPipeline()
+        vs, bm25    = vs_mgr.load_or_create(pipeline.run)
+        _engine     = RAGEngine(vs, bm25)
         log.info("Server ready")
     except Exception as exc:
         log.critical(f"Startup failed: {exc}", exc_info=True)
@@ -36,7 +40,6 @@ async def lifespan(app: FastAPI):
     log.info("Server shutdown")
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title=cfg.API_TITLE,
     version=cfg.API_VERSION,
@@ -44,7 +47,6 @@ app = FastAPI(
 )
 
 
-# ── Models ────────────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     query:      str = Field(..., min_length=1, max_length=cfg.MAX_QUERY_LENGTH)
     session_id: str = Field(default="default", min_length=1, max_length=100)
@@ -64,7 +66,6 @@ class ChatResponse(BaseModel):
     metadata: dict
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     if _engine is None:
@@ -86,11 +87,16 @@ async def chat(req: ChatRequest):
     ctx_docs = result.get("context", [])
     pages    = sorted({int(d.metadata.get("page", 0)) + 1 for d in ctx_docs})
     refs     = [d.metadata.get("reference_path", "—") for d in ctx_docs[:5]]
+    rerank_scores = [d.metadata.get("rerank_score") for d in ctx_docs if "rerank_score" in d.metadata]
 
     return ChatResponse(
         answer=answer,
         sources=pages,
-        metadata={"total_sources": len(ctx_docs), "references": refs},
+        metadata={
+            "total_sources":  len(ctx_docs),
+            "references":     refs,
+            "rerank_scores":  rerank_scores[:5],
+        },
     )
 
 

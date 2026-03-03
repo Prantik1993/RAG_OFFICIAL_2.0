@@ -1,3 +1,6 @@
+"""
+Logging — rotating file + console, one call to get_logger().
+"""
 
 from __future__ import annotations
 

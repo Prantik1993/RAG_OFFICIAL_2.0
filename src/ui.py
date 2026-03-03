@@ -1,7 +1,14 @@
+"""
+Streamlit UI
+============
+Clean chat interface for the GDPR Legal Assistant.
+"""
 
 from __future__ import annotations
+
 import os
 import uuid
+
 import requests
 import streamlit as st
 

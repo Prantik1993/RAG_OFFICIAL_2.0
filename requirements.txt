@@ -1,41 +1,33 @@
-# ----------------------------
-# Core API Framework
-# ----------------------------
-fastapi==0.110.0
-uvicorn[standard]==0.27.1
+# Core LLM / RAG
+langchain==0.3.25
+langchain-community==0.3.23
+langchain-openai==0.3.16
+langchain-huggingface==0.1.2
+langchain-text-splitters==0.3.8
+faiss-cpu==1.9.0
+openai==1.78.0
 
-# ----------------------------
-# LLM & LangChain
-# ----------------------------
-langchain==0.2.16
-langchain-openai==0.1.23
-langchain-community==0.2.16
-langchain-core==0.2.38
+# Embeddings + Reranking
+sentence-transformers==3.4.1   # CrossEncoder + bi-encoder
 
-# ----------------------------
-# Embeddings
-# ----------------------------
-langchain-huggingface==0.0.3
-sentence-transformers==2.6.1
-torch>=2.1.0
+# Hybrid search (BM25)
+rank-bm25==0.2.2
 
-# ----------------------------
-# Vector Store
-# ----------------------------
-faiss-cpu==1.7.4
+# PDF
+pypdf==5.4.0
 
-# ----------------------------
-# PDF Processing
-# ----------------------------
-pypdf==4.2.0
+# API
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+pydantic==2.11.4
 
-# ----------------------------
-# Environment Variables
-# ----------------------------
-python-dotenv==1.0.1
+# UI
+streamlit==1.45.1
 
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-streamlit==1.33.0
-requests==2.31.0
+# Utils
+python-dotenv==1.1.0
+
+# Dev / test
+pytest==8.3.5
+pytest-cov==6.1.0
+httpx==0.28.1
