@@ -1,157 +1,228 @@
-# GDPR Legal RAG System v4.1  —  Hybrid + Rerank
+# GDPR Legal RAG System v4.2
 
-Production-grade RAG pipeline for GDPR (EU 2016/679) Q&A.
+Production-grade, Advanced RAG pipeline for GDPR (EU 2016/679).
+Hybrid retrieval (FAISS + BM25) · CrossEncoder reranking · Prompt versioning · RAGAS evaluation
 
-## Architecture
+---
+
+## Architecture — full flow
 
 ```
-                        QUERY
-                          │
-                    [FastAPI :8000]
-                          │
-               ┌──────────▼──────────┐
-               │  SafetyGuardrails   │  ← injection, length, garbage check
-               └──────────┬──────────┘
-                          │
-               ┌──────────▼──────────┐
-               │    QueryCache       │  ← LRU in-memory, SHA256 key
-               └──────────┬──────────┘
-                    cache MISS
-                          │
-               ┌──────────▼──────────┐
-               │   QueryAnalyzer     │  ← regex only, zero LLM cost
-               │  (intent + refs)    │    EXACT / RANGE / SEMANTIC
-               └──────┬────────┬─────┘
-                       │        │
-              ┌────────▼──┐  ┌──▼──────────┐
-              │   FAISS   │  │    BM25      │   STEP 1: RETRIEVE
-              │  (dense)  │  │  (sparse)    │   fetch K_FETCH=20 each
-              │ semantic  │  │  keyword     │
-              └────────┬──┘  └──┬───────────┘
-                       │        │
-               ┌───────▼────────▼──────┐
-               │  RRF Fusion           │   STEP 2: FUSE
-               │  (Reciprocal Rank     │   rank-merge without score normalisation
-               │   Fusion, k=60)       │   deduplicates, ~40 unique candidates
-               └──────────┬────────────┘
-                          │
-               ┌──────────▼──────────┐
-               │  CrossEncoder       │   STEP 3: RERANK
-               │  Reranker           │   scores every (query, doc) pair jointly
-               │  ms-marco-MiniLM    │   returns final top-K=6
-               └──────────┬──────────┘
-                          │
-               ┌──────────▼──────────┐
-               │  ChatOpenAI         │   STEP 4: GENERATE (1 LLM call)
-               │  gpt-4o-mini        │   strict grounded-only prompt
-               │  + chat history     │   RunnableWithMessageHistory
-               └──────────┬──────────┘
-                          │
-               ┌──────────▼──────────┐
-               │  output safety      │  ← prompt leak detection
-               │  + LLMTracker       │  ← latency JSONL log
-               │  + QueryCache.set() │
-               └──────────┬──────────┘
-                          │
+                           QUERY
+                             │
+                    ┌────────▼─────────┐
+                    │   FastAPI :8000   │
+                    └────────┬─────────┘
+                             │
+              ┌──────────────▼──────────────┐
+              │      SafetyGuardrails        │
+              │  injection · length · garbage│
+              └──────────────┬──────────────┘
+                             │
+              ┌──────────────▼──────────────┐
+              │         QueryCache           │
+              │     LRU · SHA256 key         │
+              └──────────────┬──────────────┘
+                        cache MISS
+                             │
+              ┌──────────────▼──────────────┐
+              │       QueryAnalyzer          │  regex only — ZERO LLM cost
+              │  EXACT · RANGE · SEMANTIC    │
+              └────────┬──────────┬──────────┘
+                       │          │
+          ┌────────────▼──┐   ┌───▼──────────┐
+          │  FAISS (dense) │   │  BM25 (sparse)│  Step 1: RETRIEVE
+          │  semantic      │   │  keyword      │  K_FETCH=20 each
+          └────────────┬──┘   └───┬───────────┘
+                       │          │
+              ┌────────▼──────────▼──────┐
+              │     RRF Fusion            │  Step 2: FUSE
+              │  Reciprocal Rank Fusion   │  ~40 unique candidates
+              └──────────────┬────────────┘
+                             │
+              ┌──────────────▼──────────────┐
+              │    CrossEncoder Reranker     │  Step 3: RERANK
+              │  ms-marco-MiniLM-L-6-v2     │  scores every (q,doc) pair
+              │  22MB · CPU · ~50ms         │  returns final top-K=6
+              └──────────────┬──────────────┘
+                             │
+              ┌──────────────▼──────────────┐
+              │     PromptRegistry           │  Step 4: LOAD PROMPT
+              │  prompts/vN.yaml · versioned │  active = PROMPT_VERSION env
+              └──────────────┬──────────────┘
+                             │
+              ┌──────────────▼──────────────┐
+              │       ChatOpenAI             │  Step 5: GENERATE
+              │  gpt-4o-mini · temp=0        │  ONE LLM call per query
+              │  + RunnableWithMessageHistory│
+              └──────────────┬──────────────┘
+                             │
+              ┌──────────────▼──────────────┐
+              │   Output Safety · Tracker   │
+              │   QueryCache.set()          │
+              └──────────────┬──────────────┘
+                             │
                     ChatResponse
-                  answer + sources
-                  + rerank_scores
+               answer · sources · source_files
+               prompt_version · rerank_scores
 
 
-STARTUP (once on server launch)
-────────────────────────────────
+STARTUP SEQUENCE (once at launch)
+───────────────────────────────────
 VectorStoreManager.load_or_create()
-  ├─ FAISS: load from disk  OR  build from Documents
-  └─ BM25:  always rebuild in-memory (~1s, no persistence needed)
-
-IngestionPipeline.run()  (only if no FAISS index on disk)
-  GDPRParser.parse()       regex → LegalChunks (CHAPTER→SECTION→ARTICLE→POINT→SUBPOINT)
-  RecursiveTextSplitter    oversized chunks split, metadata preserved
-  HuggingFaceEmbeddings    all-MiniLM-L6-v2, runs on CPU
-  FAISS.from_documents()   build + save to storage/faiss_index/
+  ├─ FAISS: load from disk  OR  IngestionPipeline.run()
+  │     └─ scans ALL *.pdf in data/pdfs/
+  │         GDPRParser — regex hierarchy CHAPTER→SECTION→ARTICLE→POINT→SUBPOINT
+  │         stamps every chunk: source_file + source_hash
+  │         RecursiveTextSplitter — oversized chunks split
+  │         HuggingFaceEmbeddings — all-MiniLM-L6-v2 (CPU, free)
+  │         FAISS.from_documents() + save
+  └─ BM25: always rebuild in-memory (~1s, no persistence)
+PromptRegistry — loads all prompts/vN.yaml
+RAGEngine — wires everything together
 ```
+
+---
 
 ## File map
 
 ```
-src/
-├── config.py                   All settings via .env
-├── logger.py                   Rotating file + console
-├── exceptions.py               Domain exceptions per layer
-├── api.py                      FastAPI — /chat /health /metrics /cache/clear
-├── ui.py                       Streamlit chat UI
-├── ingestion/
-│   ├── parser.py               Deterministic GDPR hierarchy parser
-│   └── pipeline.py             Parse → split → Documents
-├── retrieval/
-│   ├── query_analyzer.py       Regex intent classifier (no LLM)
-│   ├── bm25_index.py           BM25Okapi keyword index        ← NEW
-│   ├── fusion.py               Reciprocal Rank Fusion         ← NEW
-│   ├── reranker.py             CrossEncoder reranker          ← NEW
-│   └── retriever.py            Hybrid FAISS+BM25+RRF+Rerank   ← UPDATED
-├── rag/
-│   └── engine.py               One LLM call per query
-├── vector_store/
-│   └── manager.py              FAISS + BM25 build/load        ← UPDATED
-├── guardrails/safety.py        Input + output validation
-├── caching/query_cache.py      LRU in-memory cache
-├── middleware/rate_limiter.py  Per-session token bucket
-└── monitoring/tracker.py       Latency + call log
+legal_rag/
+├── prompts/                         Versioned prompt YAMLs
+│   ├── v1.yaml                      Strict grounded-only
+│   └── v2.yaml                      + structured output + source attribution
+├── evaluation/
+│   ├── gdpr_testset.json            20 hand-crafted Q&A pairs
+│   └── latest_results.json          Auto-generated after eval run
+├── data/pdfs/                       Drop all your PDFs here
+├── storage/faiss_index/             Auto-created on first run
+├── logs/                            app.log + llm_calls.jsonl
+└── src/
+    ├── config.py                    All settings via .env
+    ├── logger.py                    Rotating file + console
+    ├── exceptions.py                Domain exceptions per layer
+    ├── api.py                       FastAPI — all endpoints
+    ├── ui.py                        Streamlit chat UI
+    ├── ingestion/
+    │   ├── parser.py                Regex hierarchy parser
+    │   └── pipeline.py             Multi-PDF · source_file metadata
+    ├── retrieval/
+    │   ├── query_analyzer.py        Regex intent classifier (no LLM)
+    │   ├── bm25_index.py            BM25Okapi keyword index
+    │   ├── fusion.py                Reciprocal Rank Fusion
+    │   ├── reranker.py              CrossEncoder ms-marco
+    │   └── retriever.py             Hybrid FAISS+BM25+RRF+Rerank
+    ├── rag/
+    │   └── engine.py                One LLM call · prompt registry
+    ├── prompts/
+    │   └── registry.py             YAML prompt loader · versioning
+    ├── vector_store/
+    │   └── manager.py               FAISS + BM25 build/load
+    ├── evaluation/
+    │   └── ragas_eval.py            RAGAS metrics · CLI · compare
+    ├── guardrails/safety.py         Input + output validation
+    ├── caching/query_cache.py       LRU in-memory cache
+    ├── middleware/rate_limiter.py   Per-session token bucket
+    └── monitoring/tracker.py        Latency · prompt version log
 tests/
-├── test_query_analyzer.py      Regex parser (no deps)
-├── test_bm25.py                BM25 index (no deps)           ← NEW
-├── test_fusion.py              RRF logic (no deps)            ← NEW
-├── test_reranker.py            CrossEncoder (downloads model) ← NEW
-└── test_api.py                 FastAPI smoke tests
+    ├── test_query_analyzer.py       18 regex tests
+    ├── test_bm25.py                 8 BM25 tests
+    ├── test_fusion.py               6 RRF tests
+    ├── test_reranker.py             6 CrossEncoder tests
+    ├── test_prompt_registry.py      7 prompt registry tests
+    ├── test_pipeline_multi_pdf.py   5 multi-PDF tests
+    ├── test_evaluation.py           8 RAGAS metric tests
+    └── test_api.py                  4 API smoke tests
 ```
+
+---
 
 ## Quick start
 
 ```bash
+# 1. Install
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-cp .env.example .env              # set OPENAI_API_KEY
-cp your_gdpr.pdf data/pdfs/CELEX_32016R0679_EN_TXT.pdf
+# 2. Configure
+cp .env.example .env
+# Edit .env — set OPENAI_API_KEY
 
-uvicorn src.api:app --reload      # API  :8000
-streamlit run src/ui.py           # UI   :8501
+# 3. Drop PDFs
+cp your_gdpr_docs/*.pdf data/pdfs/
 
-# or
+# 4. Run
+uvicorn src.api:app --reload          # API  :8000
+streamlit run src/ui.py               # UI   :8501
+
+# 5. Evaluate
+python -m src.evaluation.ragas_eval                    # all 20 questions
+python -m src.evaluation.ragas_eval --quick            # first 5 (fast)
+python -m src.evaluation.ragas_eval --compare 1 2      # A/B prompt test
+
+# Docker
 docker-compose up --build
 ```
 
-## Tests
+---
+
+## API endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/chat` | Main chat — accepts `prompt_version` param |
+| GET | `/prompts` | List all prompt versions |
+| GET | `/eval/latest` | Last evaluation results |
+| POST | `/eval/run` | Trigger background evaluation |
+| GET | `/health` | Server health |
+| GET | `/metrics` | LLM call stats by prompt version |
+| POST | `/cache/clear` | Clear query cache |
+
+---
+
+## Prompt versioning
+
+Edit `prompts/v2.yaml` or create `prompts/v3.yaml`. Change active via env:
 
 ```bash
-pytest tests/ -v                       # all
-pytest tests/test_bm25.py -v           # BM25 only (fast, no downloads)
-pytest tests/test_fusion.py -v         # RRF only  (fast, no downloads)
-pytest tests/test_reranker.py -v       # needs model download ~22 MB
+PROMPT_VERSION=2 uvicorn src.api:app   # use v2
+PROMPT_VERSION=latest uvicorn src.api:app  # always highest
 ```
 
-## What changed in v4.1
+A/B test two versions:
+```bash
+python -m src.evaluation.ragas_eval --compare 1 2
+```
 
-| v4.0                          | v4.1                                      |
-|-------------------------------|-------------------------------------------|
-| FAISS semantic only           | FAISS + BM25 hybrid                       |
-| No fusion                     | Reciprocal Rank Fusion (RRF)              |
-| No reranking                  | CrossEncoder ms-marco-MiniLM-L-6-v2       |
-| Single retrieval path         | EXACT / RANGE / SEMANTIC with per-intent fusion |
-| rerank_score not exposed      | Returned in API response metadata         |
+---
 
-## Env vars
+## Cost breakdown
 
-| Variable            | Default                                  | Description                     |
-|---------------------|------------------------------------------|---------------------------------|
-| OPENAI_API_KEY      | (required)                               |                                 |
-| LLM_MODEL           | gpt-4o-mini                              | LLM for generation              |
-| EMBEDDING_MODEL     | sentence-transformers/all-MiniLM-L6-v2   | Bi-encoder for FAISS            |
-| RERANKER_MODEL      | cross-encoder/ms-marco-MiniLM-L-6-v2     | CrossEncoder for reranking      |
-| RETRIEVAL_K         | 6                                        | Final docs sent to LLM          |
-| RETRIEVAL_K_FETCH   | 20                                       | Candidates per retriever        |
-| CHUNK_SIZE          | 1500                                     |                                 |
-| CHUNK_OVERLAP       | 200                                      |                                 |
-| RATE_LIMIT_RPM      | 15                                       |                                 |
-| RATE_LIMIT_RPH      | 200                                      |                                 |
-| CACHE_MAX_SIZE      | 1000                                     |                                 |
+| Component | Cost | Notes |
+|---|---|---|
+| Embeddings (HuggingFace) | $0 | Local CPU |
+| BM25 search | $0 | Pure Python |
+| CrossEncoder reranker | $0 | 22MB local model |
+| Query analysis | $0 | Regex only |
+| **gpt-4o-mini** | ~$0.0002/query | Only cost |
+| Cache hits | $0 | Same query free |
+
+500 users × 5 queries/day = **~$0.50/day**
+
+---
+
+## RAG maturity level
+
+| Feature | Status |
+|---|---|
+| Naive RAG (chunk → embed → search → LLM) | ✅ |
+| Structured chunking with metadata | ✅ |
+| Hybrid search (dense + sparse) | ✅ |
+| RRF fusion | ✅ |
+| CrossEncoder reranking | ✅ |
+| Prompt versioning + A/B testing | ✅ |
+| RAGAS evaluation suite | ✅ |
+| Multi-PDF with source attribution | ✅ |
+| Query rewriting / HyDE | — next step |
+| Self-RAG (grounding verification loop) | — next step |
+

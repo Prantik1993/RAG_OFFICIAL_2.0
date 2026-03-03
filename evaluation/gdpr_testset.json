@@ -1,0 +1,122 @@
+[
+  {
+    "id": "T001",
+    "question": "What is the right of access under Article 15?",
+    "ground_truth": "Article 15 grants the data subject the right to obtain confirmation of whether personal data concerning them is being processed, and if so, access to that data and information including the purposes, categories, recipients, retention period, and the right to lodge a complaint.",
+    "reference": "Article 15"
+  },
+  {
+    "id": "T002",
+    "question": "What are the lawful bases for processing under Article 6?",
+    "ground_truth": "Article 6 lists six lawful bases: consent, contract performance, legal obligation, vital interests, public task, and legitimate interests of the controller or third party.",
+    "reference": "Article 6"
+  },
+  {
+    "id": "T003",
+    "question": "What does Article 17 say about the right to erasure?",
+    "ground_truth": "Article 17 grants data subjects the right to obtain erasure of personal data without undue delay when data is no longer necessary, consent is withdrawn, subject objects, data was unlawfully processed, or legal obligation requires erasure.",
+    "reference": "Article 17"
+  },
+  {
+    "id": "T004",
+    "question": "What is the definition of personal data?",
+    "ground_truth": "Personal data means any information relating to an identified or identifiable natural person; an identifiable natural person is one who can be identified directly or indirectly by reference to an identifier such as a name, ID number, location data, or online identifier.",
+    "reference": "Article 4"
+  },
+  {
+    "id": "T005",
+    "question": "What are the data minimisation requirements?",
+    "ground_truth": "Article 5(1)(c) requires that personal data be adequate, relevant and limited to what is necessary in relation to the purposes for which it is processed.",
+    "reference": "Article 5"
+  },
+  {
+    "id": "T006",
+    "question": "What is the maximum fine for GDPR violations?",
+    "ground_truth": "Article 83 provides for fines up to 20 million euros or 4% of total worldwide annual turnover, whichever is higher, for the most serious infringements.",
+    "reference": "Article 83"
+  },
+  {
+    "id": "T007",
+    "question": "What is the right to data portability?",
+    "ground_truth": "Article 20 gives data subjects the right to receive their personal data in a structured, commonly used, machine-readable format and to transmit it to another controller where processing is based on consent or contract and carried out by automated means.",
+    "reference": "Article 20"
+  },
+  {
+    "id": "T008",
+    "question": "What must a data breach notification contain?",
+    "ground_truth": "Article 33 requires breach notification to the supervisory authority within 72 hours containing: the nature of the breach, categories and approximate number of individuals affected, likely consequences, and measures taken or proposed.",
+    "reference": "Article 33"
+  },
+  {
+    "id": "T009",
+    "question": "When is a Data Protection Impact Assessment required?",
+    "ground_truth": "Article 35 requires a DPIA prior to processing that is likely to result in a high risk, particularly when using new technologies, profiling, large-scale processing of special categories of data, or systematic monitoring of publicly accessible areas.",
+    "reference": "Article 35"
+  },
+  {
+    "id": "T010",
+    "question": "What are the special categories of personal data under Article 9?",
+    "ground_truth": "Article 9 identifies special categories as data revealing racial or ethnic origin, political opinions, religious or philosophical beliefs, trade union membership, genetic data, biometric data, health data, sex life or sexual orientation.",
+    "reference": "Article 9"
+  },
+  {
+    "id": "T011",
+    "question": "What is the accountability principle?",
+    "ground_truth": "Article 5(2) establishes the accountability principle: the controller shall be responsible for and able to demonstrate compliance with the data protection principles.",
+    "reference": "Article 5"
+  },
+  {
+    "id": "T012",
+    "question": "What is required for valid consent under GDPR?",
+    "ground_truth": "Article 7 requires that consent be freely given, specific, informed and unambiguous. The controller must demonstrate that consent was given. Withdrawal must be as easy as giving consent.",
+    "reference": "Article 7"
+  },
+  {
+    "id": "T013",
+    "question": "What are the rights of data subjects when automated decision making is used?",
+    "ground_truth": "Article 22 gives data subjects the right not to be subject to solely automated decisions that produce significant effects, with exceptions for contract necessity, legal authorisation, or explicit consent.",
+    "reference": "Article 22"
+  },
+  {
+    "id": "T014",
+    "question": "What information must be provided to data subjects at collection?",
+    "ground_truth": "Article 13 requires providing identity of controller, contact details, purposes and legal basis, legitimate interests if applicable, recipients, transfers to third countries, retention period, and rights of the data subject.",
+    "reference": "Article 13"
+  },
+  {
+    "id": "T015",
+    "question": "When must a Data Protection Officer be appointed?",
+    "ground_truth": "Article 37 requires appointment of a DPO when the controller is a public authority, when core activities require large-scale systematic monitoring of individuals, or when core activities involve large-scale processing of special category data.",
+    "reference": "Article 37"
+  },
+  {
+    "id": "T016",
+    "question": "What is the storage limitation principle?",
+    "ground_truth": "Article 5(1)(e) requires that personal data be kept in a form that permits identification of data subjects for no longer than necessary for the purposes for which it is processed.",
+    "reference": "Article 5"
+  },
+  {
+    "id": "T017",
+    "question": "What is Article 6.1.f about?",
+    "ground_truth": "Article 6(1)(f) provides that processing is lawful when necessary for the purposes of the legitimate interests pursued by the controller or by a third party, except where such interests are overridden by the interests or fundamental rights of the data subject.",
+    "reference": "Article 6"
+  },
+  {
+    "id": "T018",
+    "question": "What does Recital 42 say?",
+    "ground_truth": "Recital 42 clarifies that for consent to be freely given, it should not provide a valid legal ground where there is a clear imbalance between the data subject and the controller, particularly where the controller is a public authority.",
+    "reference": "Recital 42"
+  },
+  {
+    "id": "T019",
+    "question": "What are the conditions for processing children's data?",
+    "ground_truth": "Article 8 provides that where information society services are offered to children under 16 (or lower age set by Member State, minimum 13), processing of their personal data is lawful only with parental consent.",
+    "reference": "Article 8"
+  },
+  {
+    "id": "T020",
+    "question": "What is the right to restriction of processing?",
+    "ground_truth": "Article 18 gives data subjects the right to obtain restriction of processing in cases of contested accuracy, unlawful processing where the subject opposes erasure, data no longer needed but required for legal claims, or pending verification of legitimate grounds.",
+    "reference": "Article 18"
+  }
+]
