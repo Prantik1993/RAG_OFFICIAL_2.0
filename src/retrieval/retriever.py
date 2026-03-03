@@ -1,23 +1,8 @@
-"""
-Smart Retriever
-===============
-Routes each query to the right retrieval strategy based on QueryAnalysis:
-
-  EXACT   -> metadata filter over all docs, then semantic top-up
-  RANGE   -> chapter/section filter, article-level docs only
-  SEMANTIC -> pure vector similarity search
-
-No k=5000 hack.  FAISS docstore is iterated once at startup and cached.
-"""
-
 from __future__ import annotations
-
 from functools import cached_property
 from typing import Optional
-
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
-
 import src.config as cfg
 from src.logger import get_logger
 from src.retrieval.query_analyzer import Intent, QueryAnalysis, QueryAnalyzer
