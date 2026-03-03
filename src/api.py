@@ -1,13 +1,5 @@
-"""
-FastAPI Backend
-===============
-Clean, minimal — one chat endpoint, health, stats, cache clear.
-"""
-
 from __future__ import annotations
-
 from contextlib import asynccontextmanager
-
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator

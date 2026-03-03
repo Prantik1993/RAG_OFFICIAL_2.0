@@ -1,15 +1,6 @@
-"""
-Vector Store Manager
-====================
-Wraps FAISS creation, persistence, and loading.
-Uses HuggingFace embeddings (no OpenAI cost for embeddings).
-"""
-
 from __future__ import annotations
-
 from pathlib import Path
 from typing import Optional
-
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
